@@ -6,7 +6,9 @@ import {
   ManagedFileSnapshot,
   OpenSsh,
 } from "@agenv/core";
-import { Console, Effect, Layer } from "effect";
+import { Console, Effect, FileSystem, Layer, Option, Path, Ref, Stdio, Terminal } from "effect";
+import { CliOutput, Command, Flag } from "effect/unstable/cli";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -18,76 +20,61 @@ export interface CliResult {
   readonly stdout: string;
 }
 
-interface ParsedCommand {
-  readonly host?: string;
-  readonly json: boolean;
-  readonly kind: "list-hosts" | "inspect-codex-config";
-}
-
 export const runCli = Effect.fn("Cli.runCli")(function* (args: readonly string[]) {
-  const parsed = parseArgs(args);
-
-  if (parsed.kind === "list-hosts") {
-    const inventory = yield* MachineInventory.list();
-
-    return success(
-      parsed.json ? renderJson({ hosts: inventory.machines }) : renderHosts(inventory),
-    );
-  }
-
-  const snapshot = yield* CodexConfigFile.readConfig({
-    target:
-      parsed.host === undefined
-        ? {
-            type: "local",
-          }
-        : {
-            alias: parsed.host,
-            type: "ssh",
-          },
+  const resultRef = yield* Ref.make<CliResult>(success(""));
+  const command = makeCommand(resultRef);
+  const run = Command.runWith(command, {
+    version: "0.0.0",
   });
 
-  return success(parsed.json ? renderJson(snapshot) : renderSnapshot(snapshot, parsed.host));
+  yield* run(args).pipe(Effect.provide(cliLayer));
+  return yield* Ref.get(resultRef);
 });
 
-const parseArgs = (args: readonly string[]): ParsedCommand => {
-  const json = args.includes("--json");
-  const host = optionValue(args, "--host");
-  const positional = args.filter((arg) => !arg.startsWith("--") && !isOptionValue(args, arg));
-  const command = positional.join(" ");
+const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
+  const jsonFlag = Flag.boolean("json");
 
-  if (command === "list hosts") {
-    return {
-      json,
-      kind: "list-hosts",
-    };
-  }
+  const hosts = Command.make("hosts", { json: jsonFlag }, (config) =>
+    Effect.gen(function* () {
+      const inventory = yield* MachineInventory.list();
+      const stdout = config.json
+        ? renderJson({ hosts: inventory.machines })
+        : renderHosts(inventory);
 
-  if (command === "inspect codex config") {
-    return {
-      ...(host === undefined ? {} : { host }),
-      json,
-      kind: "inspect-codex-config",
-    };
-  }
+      yield* Ref.set(resultRef, success(stdout));
+    }),
+  );
+  const list = Command.make("list").pipe(Command.withSubcommands([hosts]));
 
-  throw new Error(`Unknown command: ${args.join(" ")}`);
-};
+  const configCommand = Command.make(
+    "config",
+    {
+      host: Flag.string("host").pipe(Flag.optional),
+      json: jsonFlag,
+    },
+    (options) =>
+      Effect.gen(function* () {
+        const host = Option.getOrUndefined(options.host);
+        const snapshot = yield* CodexConfigFile.readConfig({
+          target:
+            host === undefined
+              ? {
+                  type: "local",
+                }
+              : {
+                  alias: host,
+                  type: "ssh",
+                },
+        });
+        const stdout = options.json ? renderJson(snapshot) : renderSnapshot(snapshot, host);
 
-const optionValue = (args: readonly string[], option: string) => {
-  const index = args.indexOf(option);
+        yield* Ref.set(resultRef, success(stdout));
+      }),
+  );
+  const codex = Command.make("codex").pipe(Command.withSubcommands([configCommand]));
+  const inspect = Command.make("inspect").pipe(Command.withSubcommands([codex]));
 
-  if (index === -1) {
-    return undefined;
-  }
-
-  return args.at(index + 1);
-};
-
-const isOptionValue = (args: readonly string[], value: string) => {
-  const index = args.indexOf(value);
-
-  return args.at(index - 1) === "--host";
+  return Command.make("agenv").pipe(Command.withSubcommands([list, inspect]));
 };
 
 const success = (stdout: string): CliResult => ({
@@ -155,6 +142,33 @@ const liveLayer = Layer.mergeAll(
   MachineInventory.liveLayer({
     sshConfigPath: join(process.env.HOME ?? homedir(), ".ssh", "config"),
   }),
+);
+
+const cliLayer = Layer.mergeAll(
+  FileSystem.layerNoop({}),
+  Path.layer,
+  Stdio.layerTest({}),
+  CliOutput.layer(
+    CliOutput.defaultFormatter({
+      colors: false,
+    }),
+  ),
+  Layer.succeed(
+    Terminal.Terminal,
+    Terminal.make({
+      columns: Effect.succeed(80),
+      display: () => Effect.void,
+      readInput: Effect.die("Terminal input is not available for agenv commands"),
+      readLine: Effect.die("Terminal input is not available for agenv commands"),
+      rows: Effect.succeed(24),
+    }),
+  ),
+  Layer.succeed(
+    ChildProcessSpawner.ChildProcessSpawner,
+    ChildProcessSpawner.make(() =>
+      Effect.die("Child process spawning is not available for agenv commands"),
+    ),
+  ),
 );
 
 const program = Effect.gen(function* () {
