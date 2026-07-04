@@ -50,6 +50,11 @@ export class OpenSsh extends Context.Service<
       alias: string,
       path: string,
     ) => Effect.Effect<string, RemoteFileReadFailure>;
+    readonly writeFile: (
+      alias: string,
+      path: string,
+      contents: string,
+    ) => Effect.Effect<void, RemoteFileReadFailure>;
     readonly resolve: (alias: string) => Effect.Effect<string, ConnectionFailed>;
   }
 >()("OpenSsh") {}
@@ -59,6 +64,11 @@ export class OpenSsh extends Context.Service<
  */
 export const layer = (options: {
   readonly readFile?: (alias: string, path: string) => Effect.Effect<string, RemoteFileReadFailure>;
+  readonly writeFile?: (
+    alias: string,
+    path: string,
+    contents: string,
+  ) => Effect.Effect<void, RemoteFileReadFailure>;
   readonly resolve: (alias: string) => Effect.Effect<string, ConnectionFailed>;
 }) =>
   Layer.succeed(OpenSsh)({
@@ -68,6 +78,14 @@ export const layer = (options: {
         Effect.fail(
           new ConnectionFailed({
             message: `OpenSSH remote file read is not configured for ${alias}:${path}`,
+          }),
+        )),
+    writeFile:
+      options.writeFile ??
+      ((alias, path) =>
+        Effect.fail(
+          new RemoteFileUnreadable({
+            message: `OpenSSH remote file write is not configured for ${alias}:${path}`,
           }),
         )),
     resolve: options.resolve,
@@ -106,10 +124,25 @@ export const liveLayer = Layer.succeed(OpenSsh)({
         return result.stdout;
       },
     }),
+  writeFile: (alias, path, contents) =>
+    Effect.tryPromise({
+      catch: (error) => classifyRemoteReadFailure(error),
+      try: async () => {
+        validateAlias(alias);
+
+        await execFilePromise("ssh", [
+          alias,
+          "sh",
+          "-lc",
+          remoteWriteCommand(path, Buffer.from(contents, "utf8").toString("base64")),
+        ]);
+      },
+    }),
 });
 
 export const unsafeOpenSshInternals = {
   remoteReadCommand,
+  remoteWriteCommand,
   validateAlias,
 };
 
@@ -128,6 +161,20 @@ function remoteReadCommand(path: string) {
     `if [ ! -e ${quotedPath} ]; then exit 2; fi`,
     `if [ ! -r ${quotedPath} ]; then exit 3; fi`,
     `cat -- ${quotedPath}`,
+  ].join("; ");
+}
+
+function remoteWriteCommand(path: string, base64Contents: string) {
+  const quotedPath = shellPath(path);
+  const quotedContents = quoteShell(base64Contents);
+
+  return [
+    `parent=$(dirname -- ${quotedPath})`,
+    `mkdir -p -- "$parent"`,
+    `tmp=$(mktemp "$parent/.agenv-config.toml.XXXXXX")`,
+    `printf '%s' ${quotedContents} | base64 -d > "$tmp"`,
+    `if [ -e ${quotedPath} ]; then chmod --reference=${quotedPath} "$tmp" 2>/dev/null || true; else chmod 600 "$tmp"; fi`,
+    `mv -f -- "$tmp" ${quotedPath}`,
   ].join("; ");
 }
 

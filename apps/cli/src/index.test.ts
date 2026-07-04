@@ -137,6 +137,244 @@ describe("CLI Host Visibility", () => {
     );
   });
 
+  let missingDestinationWrite: string | undefined;
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer((path) => {
+        assert.strictEqual(path, "/home/example/.codex/config.toml");
+
+        return Effect.succeed('model = "gpt-5"\n');
+      }),
+      OpenSsh.layer({
+        readFile: () =>
+          missingDestinationWrite === undefined
+            ? Effect.fail(
+                new OpenSsh.RemoteFileNotFound({
+                  message: "remote file is missing",
+                }),
+              )
+            : Effect.succeed(missingDestinationWrite),
+        resolve: () => Effect.succeed(""),
+        writeFile: (_alias, _path, contents) =>
+          Effect.sync(() => {
+            missingDestinationWrite = contents;
+          }),
+      }),
+      MachineInventory.emptyLayer,
+    ),
+  )((test) => {
+    test.effect("creates a missing destination during push apply", () =>
+      Effect.gen(function* () {
+        missingDestinationWrite = undefined;
+
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const result = yield* runCli([
+          "push",
+          "codex",
+          "config",
+          "--host",
+          "workstation",
+          "--apply",
+        ]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.strictEqual(missingDestinationWrite, 'model = "gpt-5"\n');
+        assert.match(result.stdout, /Applied and verified\./);
+      }),
+    );
+  });
+
+  let writeAfterMissingSource = false;
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(
+        () =>
+          Effect.fail(
+            new AgentFileSystem.FileNotFound({
+              message: "Codex Config File is missing",
+            }),
+          ),
+        () =>
+          Effect.sync(() => {
+            writeAfterMissingSource = true;
+          }),
+      ),
+      OpenSsh.layer({
+        readFile: () => Effect.succeed('model = "gpt-4.1"\n'),
+        resolve: () => Effect.succeed(""),
+        writeFile: () =>
+          Effect.sync(() => {
+            writeAfterMissingSource = true;
+          }),
+      }),
+      MachineInventory.emptyLayer,
+    ),
+  )((test) => {
+    test.effect("fails missing push source without writing", () =>
+      Effect.gen(function* () {
+        writeAfterMissingSource = false;
+
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const result = yield* runCli([
+          "push",
+          "codex",
+          "config",
+          "--host",
+          "workstation",
+          "--apply",
+          "--json",
+        ]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        const parsed = JSON.parse(result.stdout);
+
+        assert.strictEqual(result.exitCode, 1);
+        assert.strictEqual(writeAfterMissingSource, false);
+        assert.strictEqual(parsed.error, "Source is missing.");
+        assert.strictEqual(parsed.source.state, "missing");
+      }),
+    );
+  });
+
+  let writtenRemoteContents: string | undefined;
+  let remoteReadCount = 0;
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer((path) => {
+        assert.strictEqual(path, "/home/example/.codex/config.toml");
+
+        return Effect.succeed('model = "gpt-5"\n');
+      }),
+      OpenSsh.layer({
+        readFile: () =>
+          Effect.sync(() => {
+            remoteReadCount += 1;
+
+            if (remoteReadCount === 1) {
+              return 'model = "gpt-4.1"\n';
+            }
+
+            return writtenRemoteContents ?? "";
+          }),
+        resolve: () => Effect.succeed(""),
+        writeFile: (alias, path, contents) =>
+          Effect.sync(() => {
+            assert.strictEqual(alias, "workstation");
+            assert.strictEqual(path, "~/.codex/config.toml");
+            writtenRemoteContents = contents;
+          }),
+      }),
+      MachineInventory.emptyLayer,
+    ),
+  )((test) => {
+    test.effect("applies push writes and verifies the remote destination", () =>
+      Effect.gen(function* () {
+        writtenRemoteContents = undefined;
+        remoteReadCount = 0;
+
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const result = yield* runCli([
+          "push",
+          "codex",
+          "config",
+          "--host",
+          "workstation",
+          "--apply",
+        ]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.strictEqual(writtenRemoteContents, 'model = "gpt-5"\n');
+        assert.strictEqual(remoteReadCount, 2);
+        assert.match(result.stdout, /Applied and verified\./);
+      }),
+    );
+  });
+
+  let localWriteCount = 0;
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(
+        () => Effect.succeed('model = "gpt-5"\n'),
+        () =>
+          Effect.sync(() => {
+            localWriteCount += 1;
+          }),
+      ),
+      OpenSsh.layer({
+        readFile: () => Effect.succeed('model = "gpt-5"\n'),
+        resolve: () => Effect.succeed(""),
+      }),
+      MachineInventory.emptyLayer,
+    ),
+  )((test) => {
+    test.effect("does not write when apply finds no diff", () =>
+      Effect.gen(function* () {
+        localWriteCount = 0;
+
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const result = yield* runCli([
+          "pull",
+          "codex",
+          "config",
+          "--host",
+          "workstation",
+          "--apply",
+        ]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.strictEqual(localWriteCount, 0);
+        assert.match(result.stdout, /No changes\./);
+      }),
+    );
+  });
+
   layer(
     Layer.mergeAll(
       AgentFileSystem.layer(() =>
@@ -209,6 +447,151 @@ describe("CLI Host Visibility", () => {
         assert.match(result.stdout, /State: connection-failed/);
         assert.match(result.stdout, /Path: workstation:~\/\.codex\/config\.toml/);
         assert.match(result.stdout, /ssh: connect to host workstation port 22: Connection refused/);
+      }),
+    );
+  });
+});
+
+describe("CLI Codex Config Push/Pull", () => {
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer((path) => {
+        assert.strictEqual(path, "/home/example/.codex/config.toml");
+
+        return Effect.succeed('model = "gpt-5"\n');
+      }),
+      OpenSsh.layer({
+        readFile: (alias, path) => {
+          assert.strictEqual(alias, "workstation");
+          assert.strictEqual(path, "~/.codex/config.toml");
+
+          return Effect.succeed('model = "gpt-4.1"\n');
+        },
+        resolve: () => Effect.succeed(""),
+      }),
+      MachineInventory.emptyLayer,
+    ),
+  )((test) => {
+    test.effect("previews push from local Codex config to a Host without writing", () =>
+      Effect.gen(function* () {
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const result = yield* runCli(["push", "codex", "config", "--host", "workstation"]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.match(result.stdout, /--- workstation:~\/\.codex\/config\.toml/);
+        assert.match(result.stdout, /\+\+\+ \/home\/example\/\.codex\/config\.toml/);
+        assert.match(result.stdout, /-model = "gpt-4\.1"/);
+        assert.match(result.stdout, /\+model = "gpt-5"/);
+        assert.strictEqual(result.stderr, "");
+      }),
+    );
+
+    test.effect("previews pull from a Host Codex config to local without writing", () =>
+      Effect.gen(function* () {
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const result = yield* runCli(["pull", "codex", "config", "--host", "workstation"]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.match(result.stdout, /--- \/home\/example\/\.codex\/config\.toml/);
+        assert.match(result.stdout, /\+\+\+ workstation:~\/\.codex\/config\.toml/);
+        assert.match(result.stdout, /-model = "gpt-5"/);
+        assert.match(result.stdout, /\+model = "gpt-4\.1"/);
+      }),
+    );
+
+    test.effect("renders structured JSON for preview mode", () =>
+      Effect.gen(function* () {
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const result = yield* runCli([
+          "push",
+          "codex",
+          "config",
+          "--host",
+          "workstation",
+          "--json",
+        ]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.deepStrictEqual(JSON.parse(result.stdout), {
+          applied: false,
+          changed: true,
+          destination: {
+            configFamily: "codex",
+            contents: 'model = "gpt-4.1"\n',
+            managedFile: "config.toml",
+            path: "workstation:~/.codex/config.toml",
+            state: "present",
+          },
+          diff:
+            "--- workstation:~/.codex/config.toml\n" +
+            "+++ /home/example/.codex/config.toml\n" +
+            "@@ -1 +1 @@\n" +
+            '-model = "gpt-4.1"\n' +
+            '+model = "gpt-5"\n',
+          direction: "push",
+          mode: "preview",
+          source: {
+            configFamily: "codex",
+            contents: 'model = "gpt-5"\n',
+            managedFile: "config.toml",
+            path: "/home/example/.codex/config.toml",
+            state: "present",
+          },
+          verified: false,
+        });
+      }),
+    );
+  });
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(() => Effect.succeed("")),
+      OpenSsh.layer({
+        resolve: () => Effect.succeed(""),
+      }),
+      MachineInventory.emptyLayer,
+    ),
+  )((test) => {
+    test.effect("requires an explicit Host for push writes", () =>
+      Effect.gen(function* () {
+        const result = yield* runCli(["push", "codex", "config"]);
+
+        assert.strictEqual(result.exitCode, 2);
+        assert.strictEqual(result.stdout, "");
+        assert.match(result.stderr, /--host is required/);
       }),
     );
   });

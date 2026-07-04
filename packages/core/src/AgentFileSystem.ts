@@ -43,6 +43,7 @@ export class AgentFileSystem extends Context.Service<
   AgentFileSystem,
   {
     readonly readFile: (path: string) => Effect.Effect<string, FileReadFailure>;
+    readonly writeFile: (path: string, contents: string) => Effect.Effect<void, FileReadFailure>;
   }
 >()("AgentFileSystem") {}
 
@@ -52,7 +53,18 @@ export class AgentFileSystem extends Context.Service<
  * The implementation decides where bytes come from; callers still receive typed
  * file read failures instead of raw platform errors.
  */
-export const layer = (readFile: (path: string) => Effect.Effect<string, FileReadFailure>) =>
+export const layer = (
+  readFile: (path: string) => Effect.Effect<string, FileReadFailure>,
+  writeFile?: (path: string, contents: string) => Effect.Effect<void, FileReadFailure>,
+) =>
   Layer.succeed(AgentFileSystem)({
     readFile,
+    writeFile:
+      writeFile ??
+      ((path) =>
+        Effect.fail(
+          new FileUnreadable({
+            message: `AgentFileSystem write is not configured for ${path}`,
+          }),
+        )),
   });
