@@ -1,0 +1,21 @@
+apps/cli/src/index.test.ts
+  s_f48fa487f43e67::t_d55ef6bf3f0126 4,7-8,144-147,225,231-245,323-490,1007-1031,1036
+apps/cli/src/index.ts
+  s_f48fa487f43e67::t_0b1f56970c4b9b 16,74,93,109-113,125,145-149,182,198-202,281,292-311,317-320,324-329,410,416-418,422,450-697
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "af2bf76b84cc81d1b35a70e435099243936fd40f",
+  "prompts": {},
+  "sessions": {
+    "s_f48fa487f43e67": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f2e5d-2595-72c1-86fc-3516b8ede744",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Patryk Sztuczka <patryk.sztuczka00@gmail.com>"
+    }
+  }
+}
