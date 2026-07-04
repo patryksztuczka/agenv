@@ -261,10 +261,8 @@ const renderSyncResult = (result: CodexConfigFile.SyncConfigResult) => {
 
   if (result.error !== undefined) {
     lines.push(result.error);
-  } else if (result.mode === "apply" && result.applied) {
+  } else if (result.mode === "apply" && result.changed && result.applied) {
     lines.push("Applied and verified.");
-  } else if (result.mode === "apply") {
-    lines.push("No changes.");
   }
 
   return `${lines.join("\n")}\n`;

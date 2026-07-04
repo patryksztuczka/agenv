@@ -431,7 +431,7 @@ describe("CLI Host Visibility", () => {
 
         assert.strictEqual(result.exitCode, 0);
         assert.strictEqual(localWriteCount, 0);
-        assert.match(result.stdout, /No changes\./);
+        assert.strictEqual(result.stdout, "No changes.\n");
       }),
     );
   });
