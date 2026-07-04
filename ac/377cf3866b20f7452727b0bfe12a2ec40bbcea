@@ -1,0 +1,33 @@
+packages/core/src/index.test.ts
+  s_615213a5d5f40e::t_e792db1e9b946d 3-5,272-337
+  s_615213a5d5f40e::t_f0a8cb317260fc 561
+  s_615213a5d5f40e::t_20611f3133d0a9 338,540-560,562-627
+  s_615213a5d5f40e::t_bf9ede7548db15 339-340
+packages/core/src/OpenSsh.ts
+  s_615213a5d5f40e::t_23ee353eade79d 108-111,138-140,148,185-186
+  s_da71833e53ec72::t_091637a6f22e55 187-188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ac377cf3866b20f7452727b0bfe12a2ec40bbcea",
+  "prompts": {},
+  "sessions": {
+    "s_615213a5d5f40e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f2e81-39fd-7732-be2c-e959c6863eac",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Patryk Sztuczka <patryk.sztuczka00@gmail.com>"
+    },
+    "s_da71833e53ec72": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f2e81-4125-7083-8c54-e88df656cf3b",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Patryk Sztuczka <patryk.sztuczka00@gmail.com>"
+    }
+  }
+}
