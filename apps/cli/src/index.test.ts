@@ -1,7 +1,10 @@
 import { AgentFileSystem, MachineInventory, OpenSsh } from "@agenv/core";
 import { assert, describe, layer } from "@effect/vitest";
 import { Effect, Layer } from "effect";
+import { createHash } from "node:crypto";
 import { runCli } from "./index.js";
+
+const sha256 = (contents: string) => createHash("sha256").update(contents).digest("hex");
 
 describe("CLI Host Visibility", () => {
   layer(
@@ -116,7 +119,10 @@ describe("CLI Host Visibility", () => {
         assert.strictEqual(result.exitCode, 0);
         assert.deepStrictEqual(JSON.parse(result.stdout), {
           configFamily: "codex",
-          contents: 'model = "gpt-4"',
+          contentByteCount: Buffer.byteLength('model = "gpt-4"', "utf8"),
+          contentSha256: sha256('model = "gpt-4"'),
+          contentsPreview: 'model = "gpt-4"',
+          contentsRedacted: false,
           managedFile: "config.toml",
           path: "/home/example/.codex/config.toml",
           state: "present",
@@ -193,7 +199,191 @@ describe("CLI Host Visibility", () => {
         assert.strictEqual(body.left.target.type, "local");
         assert.strictEqual(body.right.path, "workstation:~/.codex/config.toml");
         assert.strictEqual(body.right.target.alias, "workstation");
+        assert.strictEqual(body.diffRedacted, false);
         assert.match(body.diff, /--- \/home\/example\/\.codex\/config\.toml/);
+      }),
+    );
+  });
+
+  const localConfigWithSecrets = [
+    'model = "gpt-5"',
+    'api_key = "sk-test-do-not-use-local"',
+    'env = { OPENAI_API_KEY = "sk-test-do-not-use-inline" }',
+    "[mcp_servers.demo.env]",
+    'ANTHROPIC_API_KEY = "sk-test-do-not-use-env"',
+    "",
+  ].join("\n");
+  const remoteConfigWithSecrets = [
+    'model = "gpt-4.1"',
+    'token = "sk-test-do-not-use-remote"',
+    "",
+  ].join("\n");
+  const fakeSecretPattern = /sk-test-do-not-use/;
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer((path) => {
+        assert.strictEqual(path, "/home/example/.codex/config.toml");
+
+        return Effect.succeed(localConfigWithSecrets);
+      }),
+      OpenSsh.layer({
+        readFile: (alias, path) => {
+          assert.strictEqual(alias, "workstation");
+          assert.strictEqual(path, "~/.codex/config.toml");
+
+          return Effect.succeed(remoteConfigWithSecrets);
+        },
+        resolve: () => Effect.succeed(""),
+      }),
+      MachineInventory.emptyLayer,
+    ),
+  )((test) => {
+    test.effect("redacts sensitive inspect text by default", () =>
+      Effect.gen(function* () {
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const result = yield* runCli(["inspect", "codex", "config"]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.isFalse(fakeSecretPattern.test(result.stdout));
+        assert.match(result.stdout, /model = "gpt-5"/);
+        assert.match(result.stdout, /api_key = "<redacted>"/);
+        assert.match(result.stdout, /env = "<redacted>"/);
+        assert.match(result.stdout, /ANTHROPIC_API_KEY = "<redacted>"/);
+      }),
+    );
+
+    test.effect("redacts sensitive inspect JSON by default", () =>
+      Effect.gen(function* () {
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const result = yield* runCli(["inspect", "codex", "config", "--json"]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        const body = JSON.parse(result.stdout);
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.isFalse(fakeSecretPattern.test(result.stdout));
+        assert.strictEqual(body.contents, undefined);
+        assert.strictEqual(body.contentsRedacted, true);
+        assert.match(body.contentsPreview, /api_key = "<redacted>"/);
+        assert.match(body.contentsPreview, /ANTHROPIC_API_KEY = "<redacted>"/);
+      }),
+    );
+
+    test.effect("redacts sensitive diff and sync output by default", () =>
+      Effect.gen(function* () {
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const diffResult = yield* runCli(["diff", "codex", "config", "--host", "workstation"]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        process.env.HOME = "/home/example";
+        const syncResult = yield* runCli([
+          "push",
+          "codex",
+          "config",
+          "--host",
+          "workstation",
+          "--json",
+        ]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        const syncBody = JSON.parse(syncResult.stdout);
+
+        assert.strictEqual(diffResult.exitCode, 0);
+        assert.isFalse(fakeSecretPattern.test(diffResult.stdout));
+        assert.match(diffResult.stdout, /token = "<redacted>"/);
+        assert.match(diffResult.stdout, /api_key = "<redacted>"/);
+        assert.strictEqual(syncResult.exitCode, 0);
+        assert.isFalse(fakeSecretPattern.test(syncResult.stdout));
+        assert.strictEqual(syncBody.diffRedacted, true);
+        assert.strictEqual(syncBody.source.contents, undefined);
+        assert.strictEqual(syncBody.destination.contents, undefined);
+        assert.match(syncBody.diff, /token = "<redacted>"/);
+        assert.match(syncBody.diff, /api_key = "<redacted>"/);
+      }),
+    );
+
+    test.effect("exposes raw config output only with --raw", () =>
+      Effect.gen(function* () {
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const inspectResult = yield* runCli(["inspect", "codex", "config", "--json", "--raw"]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        process.env.HOME = "/home/example";
+        const diffResult = yield* runCli([
+          "diff",
+          "codex",
+          "config",
+          "--host",
+          "workstation",
+          "--raw",
+        ]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        assert.strictEqual(inspectResult.exitCode, 0);
+        assert.match(inspectResult.stdout, fakeSecretPattern);
+        assert.strictEqual(JSON.parse(inspectResult.stdout).contents, localConfigWithSecrets);
+        assert.strictEqual(diffResult.exitCode, 0);
+        assert.match(diffResult.stdout, fakeSecretPattern);
       }),
     );
   });
@@ -632,33 +822,36 @@ describe("CLI Codex Config Push/Pull", () => {
         );
 
         assert.strictEqual(result.exitCode, 0);
-        assert.deepStrictEqual(JSON.parse(result.stdout), {
-          applied: false,
-          changed: true,
-          destination: {
-            configFamily: "codex",
-            contents: 'model = "gpt-4.1"\n',
-            managedFile: "config.toml",
-            path: "workstation:~/.codex/config.toml",
-            state: "present",
-          },
-          diff:
-            "--- workstation:~/.codex/config.toml\n" +
+        const body = JSON.parse(result.stdout);
+
+        assert.strictEqual(body.applied, false);
+        assert.strictEqual(body.changed, true);
+        assert.strictEqual(body.direction, "push");
+        assert.strictEqual(body.mode, "preview");
+        assert.strictEqual(body.verified, false);
+        assert.strictEqual(body.diffRedacted, false);
+        assert.strictEqual(body.destination.contents, undefined);
+        assert.strictEqual(body.destination.contentsPreview, 'model = "gpt-4.1"\n');
+        assert.strictEqual(
+          body.destination.contentByteCount,
+          Buffer.byteLength('model = "gpt-4.1"\n', "utf8"),
+        );
+        assert.strictEqual(body.destination.contentSha256, sha256('model = "gpt-4.1"\n'));
+        assert.strictEqual(body.source.contents, undefined);
+        assert.strictEqual(body.source.contentsPreview, 'model = "gpt-5"\n');
+        assert.strictEqual(
+          body.source.contentByteCount,
+          Buffer.byteLength('model = "gpt-5"\n', "utf8"),
+        );
+        assert.strictEqual(body.source.contentSha256, sha256('model = "gpt-5"\n'));
+        assert.strictEqual(
+          body.diff,
+          "--- workstation:~/.codex/config.toml\n" +
             "+++ /home/example/.codex/config.toml\n" +
             "@@ -1 +1 @@\n" +
             '-model = "gpt-4.1"\n' +
             '+model = "gpt-5"\n',
-          direction: "push",
-          mode: "preview",
-          source: {
-            configFamily: "codex",
-            contents: 'model = "gpt-5"\n',
-            managedFile: "config.toml",
-            path: "/home/example/.codex/config.toml",
-            state: "present",
-          },
-          verified: false,
-        });
+        );
       }),
     );
   });

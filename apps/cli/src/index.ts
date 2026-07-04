@@ -12,6 +12,7 @@ import { Console, Effect, FileSystem, Layer, Option, Path, Ref, Stdio, Terminal 
 import type { Console as EffectConsole } from "effect/Console";
 import { CliOutput, Command, Flag } from "effect/unstable/cli";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -69,6 +70,7 @@ export const runCli = Effect.fn("Cli.runCli")(function* (args: readonly string[]
 const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
   const jsonFlag = Flag.boolean("json");
   const applyFlag = Flag.boolean("apply");
+  const rawFlag = Flag.boolean("raw");
 
   const hosts = Command.make("hosts", { json: jsonFlag }, (config) =>
     Effect.gen(function* () {
@@ -87,6 +89,7 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
     {
       host: Flag.string("host").pipe(Flag.optional),
       json: jsonFlag,
+      raw: rawFlag,
     },
     (options) =>
       Effect.gen(function* () {
@@ -102,7 +105,11 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
                   type: "ssh",
                 },
         });
-        const stdout = options.json ? renderJson(snapshot) : renderSnapshot(snapshot, host);
+        const stdout = options.json
+          ? renderJson(options.raw ? snapshot : redactSnapshot(snapshot))
+          : renderSnapshot(snapshot, host, {
+              raw: options.raw,
+            });
 
         yield* Ref.set(resultRef, success(stdout));
       }),
@@ -114,6 +121,7 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
     {
       host: Flag.string("host"),
       json: jsonFlag,
+      raw: rawFlag,
     },
     (options) =>
       Effect.gen(function* () {
@@ -133,7 +141,11 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
           right,
         });
         const output = withDiffTargets(preview, options.host);
-        const stdout = options.json ? renderJson(output) : renderDiffPreview(output);
+        const stdout = options.json
+          ? renderJson(options.raw ? output : redactDiffPreviewOutput(output))
+          : renderDiffPreview(output, {
+              raw: options.raw,
+            });
 
         yield* Ref.set(resultRef, success(stdout));
       }),
@@ -148,6 +160,7 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
         apply: applyFlag,
         host: Flag.string("host").pipe(Flag.optional),
         json: jsonFlag,
+        raw: rawFlag,
       },
       (options) =>
         Effect.gen(function* () {
@@ -163,7 +176,11 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
             host,
             mode: options.apply ? "apply" : "preview",
           });
-          const stdout = options.json ? renderJson(result) : renderSyncResult(result);
+          const stdout = options.json
+            ? renderJson(options.raw ? result : redactSyncResult(result))
+            : renderSyncResult(result, {
+                raw: options.raw,
+              });
           const exitCode = result.error === undefined ? 0 : 1;
 
           yield* Ref.set(resultRef, { exitCode, stderr: "", stdout });
@@ -234,6 +251,7 @@ const renderHosts = (inventory: MachineInventory.Inventory) => {
 const renderSnapshot = (
   snapshot: ManagedFileSnapshot.ManagedFileSnapshot,
   host: string | undefined,
+  options: RenderSecretOptions,
 ) => {
   const lines = [
     "Codex Config File",
@@ -244,17 +262,44 @@ const renderSnapshot = (
   ];
 
   if (snapshot.state === "present") {
-    return [...lines, "", snapshot.contents].join("\n");
+    if (options.raw) {
+      return [
+        ...lines,
+        "Redaction: off (--raw may expose config secrets)",
+        "",
+        snapshot.contents,
+      ].join("\n");
+    }
+
+    const safeSnapshot = redactPresentSnapshot(snapshot);
+
+    return [
+      ...lines,
+      "Redaction: on (use --raw only when you intend to expose config secrets)",
+      `Bytes: ${safeSnapshot.contentByteCount}`,
+      `SHA-256: ${safeSnapshot.contentSha256}`,
+      `Sensitive values redacted: ${safeSnapshot.contentsRedacted ? "yes" : "no"}`,
+      "",
+      safeSnapshot.contentsPreview,
+    ].join("\n");
   }
 
   return [...lines, `Error: ${snapshot.error}`].join("\n");
 };
 
-const renderSyncResult = (result: CodexConfigFile.SyncConfigResult) => {
+const renderSyncResult = (
+  result: CodexConfigFile.SyncConfigResult,
+  options: RenderSecretOptions,
+) => {
   const lines = [];
 
   if (result.diff.length > 0) {
-    lines.push(result.diff.trimEnd());
+    lines.push(
+      options.raw
+        ? "Redaction: off (--raw may expose config secrets)"
+        : "Redaction: on (use --raw only when you intend to expose config secrets)",
+    );
+    lines.push((options.raw ? result.diff : redactDiff(result.diff)).trimEnd());
   } else {
     lines.push("No changes.");
   }
@@ -308,16 +353,19 @@ const withDiffTargets = (preview: CodexConfigDiffPreview, host: string): DiffPre
   },
 });
 
-const renderDiffPreview = (preview: DiffPreviewOutput) => {
+const renderDiffPreview = (preview: DiffPreviewOutput, options: RenderSecretOptions) => {
   const lines = [
     "Codex Config Diff",
     "Left: local",
     "Right: host",
     `Host: ${preview.right.target.alias}`,
+    options.raw
+      ? "Redaction: off (--raw may expose config secrets)"
+      : "Redaction: on (use --raw only when you intend to expose config secrets)",
   ];
 
   if (preview.diff !== null) {
-    return [...lines, "", preview.diff].join("\n");
+    return [...lines, "", options.raw ? preview.diff : redactDiff(preview.diff)].join("\n");
   }
 
   return [
@@ -340,6 +388,254 @@ const renderDiffSnapshot = (
   `Path: ${snapshot.path}`,
   ...(snapshot.error === undefined ? [] : [`Error: ${snapshot.error}`]),
 ];
+
+interface RenderSecretOptions {
+  readonly raw: boolean;
+}
+
+type PresentManagedFileSnapshot = Extract<
+  ManagedFileSnapshot.ManagedFileSnapshot,
+  { readonly state: "present" }
+>;
+
+type SafePresentManagedFileSnapshot = Omit<PresentManagedFileSnapshot, "contents"> & {
+  readonly contentByteCount: number;
+  readonly contentSha256: string;
+  readonly contentsPreview: string;
+  readonly contentsRedacted: boolean;
+};
+
+type SafeManagedFileSnapshot =
+  | SafePresentManagedFileSnapshot
+  | Exclude<ManagedFileSnapshot.ManagedFileSnapshot, { readonly state: "present" }>;
+
+interface SafeDiffPreviewOutput extends Omit<DiffPreviewOutput, "diff"> {
+  readonly diff: string | null;
+  readonly diffRedacted: boolean;
+}
+
+interface SafeSyncConfigResult extends Omit<
+  CodexConfigFile.SyncConfigResult,
+  "destination" | "source"
+> {
+  readonly destination: SafeManagedFileSnapshot;
+  readonly diffRedacted: boolean;
+  readonly source: SafeManagedFileSnapshot;
+}
+
+const redactedTomlValue = '"<redacted>"';
+const sensitiveKeyParts = new Set([
+  "apikey",
+  "auth",
+  "authorization",
+  "bearer",
+  "cookie",
+  "credential",
+  "credentials",
+  "passwd",
+  "password",
+  "secret",
+  "session",
+  "token",
+]);
+const tokenLikeValuePattern =
+  /\b(?:sk-[A-Za-z0-9_-]{6,}|ghp_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{16}|Bearer\s+[A-Za-z0-9._~+/=-]{6,})\b/g;
+
+const redactSnapshot = (
+  snapshot: ManagedFileSnapshot.ManagedFileSnapshot,
+): SafeManagedFileSnapshot => {
+  if (snapshot.state !== "present") {
+    return snapshot;
+  }
+
+  return redactPresentSnapshot(snapshot);
+};
+
+const redactPresentSnapshot = (
+  snapshot: PresentManagedFileSnapshot,
+): SafePresentManagedFileSnapshot => {
+  const contentsPreview = redactTomlContents(snapshot.contents);
+
+  return {
+    configFamily: snapshot.configFamily,
+    contentByteCount: Buffer.byteLength(snapshot.contents, "utf8"),
+    contentSha256: createHash("sha256").update(snapshot.contents).digest("hex"),
+    contentsPreview,
+    contentsRedacted: contentsPreview !== snapshot.contents,
+    managedFile: snapshot.managedFile,
+    path: snapshot.path,
+    state: snapshot.state,
+  };
+};
+
+const redactDiffPreviewOutput = (preview: DiffPreviewOutput): SafeDiffPreviewOutput => {
+  const diff = preview.diff === null ? null : redactDiff(preview.diff);
+
+  return {
+    ...preview,
+    diff,
+    diffRedacted: preview.diff !== diff,
+  };
+};
+
+const redactSyncResult = (result: CodexConfigFile.SyncConfigResult): SafeSyncConfigResult => {
+  const diff = redactDiff(result.diff);
+
+  return {
+    ...result,
+    destination: redactSnapshot(result.destination),
+    diff,
+    diffRedacted: diff !== result.diff,
+    source: redactSnapshot(result.source),
+  };
+};
+
+const redactDiff = (diff: string) => {
+  const redactor = createTomlLineRedactor();
+
+  return diff
+    .split("\n")
+    .map((line) => {
+      if (line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("@@")) {
+        return line;
+      }
+
+      const prefix = line[0];
+
+      if (prefix === "+" || prefix === "-" || prefix === " ") {
+        return `${prefix}${redactor.redactLine(line.slice(1))}`;
+      }
+
+      return redactor.redactLine(line);
+    })
+    .join("\n");
+};
+
+const redactTomlContents = (contents: string) => {
+  const redactor = createTomlLineRedactor();
+
+  return contents
+    .split("\n")
+    .map((line) => redactor.redactLine(line))
+    .join("\n");
+};
+
+const createTomlLineRedactor = () => {
+  let inEnvTable = false;
+  let redactingMultilineSecret = false;
+  let multilineDelimiter: string | undefined;
+
+  const redactLine = (line: string): string => {
+    if (redactingMultilineSecret) {
+      if (multilineDelimiter !== undefined && line.includes(multilineDelimiter)) {
+        redactingMultilineSecret = false;
+        multilineDelimiter = undefined;
+      }
+
+      return "<redacted>";
+    }
+
+    const section = parseTomlSection(line);
+
+    if (section !== undefined) {
+      inEnvTable = section.some((part) => part === "env");
+      return redactSecretFragments(line);
+    }
+
+    const assignment = parseTomlAssignment(line);
+
+    if (assignment === undefined) {
+      return redactSecretFragments(line);
+    }
+
+    const forceRedact = inEnvTable || isEnvKey(assignment.key) || isSensitiveKey(assignment.key);
+
+    if (forceRedact || hasTokenLikeValue(assignment.value)) {
+      const trimmedValue = assignment.value.trimStart();
+      const delimiter = trimmedValue.startsWith('"""')
+        ? '"""'
+        : trimmedValue.startsWith("'''")
+          ? "'''"
+          : undefined;
+
+      if (delimiter !== undefined && trimmedValue.indexOf(delimiter, delimiter.length) === -1) {
+        redactingMultilineSecret = true;
+        multilineDelimiter = delimiter;
+      }
+
+      return `${assignment.prefix}${redactedTomlValue}${assignment.comment}`;
+    }
+
+    return `${assignment.prefix}${redactSecretFragments(assignment.value)}${assignment.comment}`;
+  };
+
+  return {
+    redactLine,
+  };
+};
+
+const parseTomlSection = (line: string) => {
+  const match = line.match(/^\s*\[+\s*([^\]]+?)\s*\]+\s*(?:#.*)?$/);
+
+  if (match?.[1] === undefined) {
+    return undefined;
+  }
+
+  return keyParts(match[1]);
+};
+
+const parseTomlAssignment = (line: string) => {
+  const match = line.match(/^(\s*(?:"[^"]+"|'[^']+'|[A-Za-z0-9_.-]+)\s*=\s*)(.*?)(\s*(?:#.*)?)$/);
+
+  if (match?.[1] === undefined || match[2] === undefined || match[3] === undefined) {
+    return undefined;
+  }
+
+  return {
+    comment: match[3],
+    key: match[1].slice(0, match[1].lastIndexOf("=")).trim(),
+    prefix: match[1],
+    value: match[2],
+  };
+};
+
+const isEnvKey = (key: string) => keyParts(key).some((part) => part === "env");
+
+const isSensitiveKey = (key: string) => {
+  const parts = keyParts(key);
+
+  if (parts.some((part) => sensitiveKeyParts.has(part))) {
+    return true;
+  }
+
+  const compactKey = parts.join("");
+
+  return (
+    compactKey.includes("apikey") ||
+    compactKey.includes("accesstoken") ||
+    compactKey.includes("refreshtoken") ||
+    compactKey.includes("privatekey")
+  );
+};
+
+const keyParts = (key: string) =>
+  key
+    .replaceAll(/["']/g, "")
+    .toLowerCase()
+    .split(/[._-]+/)
+    .filter((part) => part.length > 0);
+
+const hasTokenLikeValue = (value: string) => {
+  tokenLikeValuePattern.lastIndex = 0;
+  return tokenLikeValuePattern.test(value) || value.includes("-----BEGIN ");
+};
+
+const redactSecretFragments = (value: string) => {
+  tokenLikeValuePattern.lastIndex = 0;
+  return value
+    .replace(tokenLikeValuePattern, "<redacted>")
+    .replaceAll(/-----BEGIN [^-]+-----/g, "<redacted>");
+};
 
 const liveLayer = Layer.mergeAll(
   AgentFileSystem.layer(
