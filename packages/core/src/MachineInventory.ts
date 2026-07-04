@@ -7,18 +7,34 @@ import * as OpenSsh from "./OpenSsh.js";
  * possible Agent Environment targets.
  */
 export interface Inventory {
-  readonly machines: readonly SyncableMachine[];
+  readonly machines: readonly InventoryMachine[];
 }
+
+/**
+ * SSH-known machine discovered from config, with per-alias resolution state.
+ */
+export type InventoryMachine = SyncableMachine | ResolutionFailedMachine;
 
 /**
  * Concrete SSH-known machine after OpenSSH resolution.
  */
 export interface SyncableMachine {
+  readonly state: "resolved";
   readonly alias: string;
   readonly hostName: string;
   readonly user: string;
   readonly port: number;
   readonly source: Source;
+}
+
+/**
+ * SSH-known machine whose alias could not be resolved by OpenSSH.
+ */
+export interface ResolutionFailedMachine {
+  readonly state: "resolution-failed";
+  readonly alias: string;
+  readonly source: Source;
+  readonly error: string;
 }
 
 /**
@@ -40,7 +56,7 @@ export class MachineInventoryService extends Context.Service<
   {
     readonly list: Effect.Effect<
       Inventory,
-      AgentFileSystem.FileUnreadable | OpenSsh.ConnectionFailed,
+      AgentFileSystem.FileUnreadable,
       AgentFileSystem.AgentFileSystem | OpenSsh.OpenSsh
     >;
   }
@@ -96,28 +112,44 @@ export interface LoadOptions {
  *
  * This operation treats OpenSSH as the authority for resolved metadata and
  * filters wildcard/pattern Host entries so only concrete aliases become
- * Syncable Machines.
+ * inventory records. OpenSSH resolution failures stay attached to the alias
+ * that failed so one broken Host entry cannot hide the rest of inventory.
  */
 export const load = Effect.fn("MachineInventory.load")(function* (options: LoadOptions) {
   const fileSystem = yield* AgentFileSystem.AgentFileSystem;
   const openSsh = yield* OpenSsh.OpenSsh;
   const sshConfig = yield* fileSystem.readFile(options.sshConfigPath);
   const aliases = concreteHostAliases(sshConfig);
-  const machines: SyncableMachine[] = [];
+  const machines: InventoryMachine[] = [];
 
   for (const alias of aliases) {
-    const resolved = parseOpenSshResolution(yield* openSsh.resolve(alias));
+    const source: Source = {
+      kind: "ssh-config",
+      path: options.sshConfigPath,
+    };
+    const machine = yield* openSsh.resolve(alias).pipe(
+      Effect.map(parseOpenSshResolution),
+      Effect.map(
+        (resolved): InventoryMachine => ({
+          alias,
+          hostName: resolved.hostName,
+          port: resolved.port,
+          source,
+          state: "resolved",
+          user: resolved.user,
+        }),
+      ),
+      Effect.catch((failure: OpenSsh.ConnectionFailed) =>
+        Effect.succeed({
+          alias,
+          error: failure.message,
+          source,
+          state: "resolution-failed" as const,
+        } satisfies ResolutionFailedMachine),
+      ),
+    );
 
-    machines.push({
-      alias,
-      hostName: resolved.hostName,
-      port: resolved.port,
-      source: {
-        kind: "ssh-config",
-        path: options.sshConfigPath,
-      },
-      user: resolved.user,
-    });
+    machines.push(machine);
   }
 
   return { machines };
