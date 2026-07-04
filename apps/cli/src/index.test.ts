@@ -71,6 +71,31 @@ describe("CLI Host Visibility", () => {
       }),
     );
 
+    test.effect("returns Effect CLI help output from the command seam", () =>
+      Effect.gen(function* () {
+        const result = yield* runCli(["--help"]);
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.match(result.stdout, /USAGE/);
+        assert.match(result.stdout, /agenv <subcommand> \[flags\]/);
+        assert.match(result.stdout, /SUBCOMMANDS/);
+        assert.match(result.stdout, /list/);
+        assert.match(result.stdout, /inspect/);
+        assert.strictEqual(result.stderr, "");
+      }),
+    );
+
+    test.effect("returns Effect CLI parse errors from the command seam", () =>
+      Effect.gen(function* () {
+        const result = yield* runCli(["inspect", "codex", "config", "--unknown"]);
+
+        assert.strictEqual(result.exitCode, 1);
+        assert.match(result.stdout, /USAGE/);
+        assert.match(result.stdout, /agenv inspect codex config/);
+        assert.match(result.stderr, /--unknown/);
+      }),
+    );
+
     test.effect("inspects local Codex config by default as JSON", () =>
       Effect.gen(function* () {
         const originalHome = process.env.HOME;

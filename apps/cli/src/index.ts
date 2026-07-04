@@ -7,6 +7,7 @@ import {
   OpenSsh,
 } from "@agenv/core";
 import { Console, Effect, FileSystem, Layer, Option, Path, Ref, Stdio, Terminal } from "effect";
+import type { Console as EffectConsole } from "effect/Console";
 import { CliOutput, Command, Flag } from "effect/unstable/cli";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { readFile } from "node:fs/promises";
@@ -21,14 +22,45 @@ export interface CliResult {
 }
 
 export const runCli = Effect.fn("Cli.runCli")(function* (args: readonly string[]) {
-  const resultRef = yield* Ref.make<CliResult>(success(""));
+  const resultRef = yield* Ref.make<CliResult>(emptyResult);
   const command = makeCommand(resultRef);
   const run = Command.runWith(command, {
     version: "0.0.0",
   });
+  let stdout = "";
+  let stderr = "";
+  let exitCode = 0;
+  const capturedConsole: EffectConsole = {
+    ...globalThis.console,
+    error: (...values) => {
+      stderr += `${formatConsoleArgs(values)}\n`;
+    },
+    log: (...values) => {
+      stdout += `${formatConsoleArgs(values)}\n`;
+    },
+  };
 
-  yield* run(args).pipe(Effect.provide(cliLayer));
-  return yield* Ref.get(resultRef);
+  yield* run(args).pipe(
+    Effect.provide(cliLayer),
+    Effect.provideService(Console.Console, capturedConsole),
+    Effect.catchTag("ShowHelp", (error) =>
+      Effect.sync(() => {
+        exitCode = error.errors.length > 0 ? 1 : 0;
+      }),
+    ),
+  );
+
+  const handlerResult = yield* Ref.get(resultRef);
+
+  if (handlerResult.stdout.length > 0 || handlerResult.stderr.length > 0) {
+    return handlerResult;
+  }
+
+  return {
+    exitCode,
+    stderr,
+    stdout,
+  };
 });
 
 const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
@@ -82,6 +114,15 @@ const success = (stdout: string): CliResult => ({
   stderr: "",
   stdout: stdout.endsWith("\n") ? stdout : `${stdout}\n`,
 });
+
+const emptyResult: CliResult = {
+  exitCode: 0,
+  stderr: "",
+  stdout: "",
+};
+
+const formatConsoleArgs = (args: ReadonlyArray<unknown>) =>
+  args.map((arg) => (typeof arg === "string" ? arg : String(arg))).join(" ");
 
 const renderJson = (value: unknown) => `${JSON.stringify(value, undefined, 2)}\n`;
 
