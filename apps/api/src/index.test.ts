@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
-import { AgentFileSystem, CodexConfigFile, MachineInventory, OpenSsh } from "@agenv/core";
+import { AgentFileSystem, MachineInventory, OpenSsh } from "@agenv/core";
 import { Effect, Layer } from "effect";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { createApp, getGreeting } from "./index.js";
 
 describe("api", () => {
@@ -32,7 +34,7 @@ describe("api", () => {
         }),
         AgentFileSystem.layer(() =>
           Effect.fail(
-            new CodexConfigFile.NotFound({
+            new AgentFileSystem.FileNotFound({
               message: "Codex Config File is missing",
             }),
           ),
@@ -76,7 +78,7 @@ describe("api", () => {
       configFamily: "codex",
       contents: "",
       managedFile: "config.toml",
-      path: `${process.env.HOME ?? ""}/.codex/config.toml`,
+      path: join(process.env.HOME ?? homedir(), ".codex", "config.toml"),
       state: "present",
     });
   });
@@ -89,7 +91,7 @@ describe("api", () => {
         }),
         AgentFileSystem.layer(() =>
           Effect.fail(
-            new CodexConfigFile.NotFound({
+            new AgentFileSystem.FileNotFound({
               message: "unused",
             }),
           ),
@@ -125,7 +127,7 @@ describe("api", () => {
         }),
         AgentFileSystem.layer(() =>
           Effect.fail(
-            new CodexConfigFile.NotFound({
+            new AgentFileSystem.FileNotFound({
               message: "unused",
             }),
           ),

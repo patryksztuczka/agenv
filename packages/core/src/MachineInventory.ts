@@ -1,6 +1,5 @@
 import { Context, Effect, Layer } from "effect";
 import * as AgentFileSystem from "./AgentFileSystem.js";
-import * as CodexConfigFile from "./CodexConfigFile.js";
 import * as OpenSsh from "./OpenSsh.js";
 
 /**
@@ -41,7 +40,7 @@ export class MachineInventoryService extends Context.Service<
   {
     readonly list: Effect.Effect<
       Inventory,
-      CodexConfigFile.Unreadable | OpenSsh.ConnectionFailed,
+      AgentFileSystem.FileUnreadable | OpenSsh.ConnectionFailed,
       AgentFileSystem.AgentFileSystem | OpenSsh.OpenSsh
     >;
   }
@@ -66,7 +65,7 @@ export const liveLayer = (options: LoadOptions) =>
   Layer.succeed(MachineInventoryService)({
     list: load(options).pipe(
       Effect.catchIf(
-        (failure) => failure instanceof CodexConfigFile.NotFound,
+        (failure) => failure instanceof AgentFileSystem.FileNotFound,
         () =>
           Effect.succeed({
             machines: [],
@@ -130,7 +129,7 @@ export const load = Effect.fn("MachineInventory.load")(function* (options: LoadO
  */
 export const loadWith = (
   options: LoadOptions & {
-    readonly readFile: (path: string) => Effect.Effect<string, CodexConfigFile.FileReadFailure>;
+    readonly readFile: (path: string) => Effect.Effect<string, AgentFileSystem.FileReadFailure>;
     readonly runOpenSsh: (args: readonly string[]) => Effect.Effect<string>;
   },
 ) =>
@@ -145,13 +144,19 @@ export const loadWith = (
     ),
   );
 
-const concreteHostAliases = (sshConfig: string) =>
-  sshConfig
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.toLowerCase().startsWith("host "))
-    .flatMap((line) => line.slice(5).trim().split(/\s+/))
-    .filter((alias) => alias.length > 0 && !/[*?!]/.test(alias));
+const concreteHostAliases = (sshConfig: string) => [
+  ...new Set(
+    sshConfig
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .flatMap((line) => {
+        const match = /^host\s+(.+)$/i.exec(line);
+
+        return match === null ? [] : (match[1] ?? "").trim().split(/\s+/);
+      })
+      .filter((alias) => alias.length > 0 && !/[*?!]/.test(alias)),
+  ),
+];
 
 const parseOpenSshResolution = (output: string) => {
   const fields = new Map(

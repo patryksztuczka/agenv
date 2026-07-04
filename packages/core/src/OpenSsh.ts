@@ -85,6 +85,8 @@ export const liveLayer = Layer.succeed(OpenSsh)({
     Effect.tryPromise({
       catch: (error) => classifyRemoteReadFailure(error),
       try: async () => {
+        validateAlias(alias);
+
         const result = await execFilePromise("ssh", [alias, "sh", "-lc", remoteReadCommand(path)]);
 
         return result.stdout;
@@ -97,6 +99,8 @@ export const liveLayer = Layer.succeed(OpenSsh)({
           message: errorMessage(error),
         }),
       try: async () => {
+        validateAlias(alias);
+
         const result = await execFilePromise("ssh", ["-G", alias]);
 
         return result.stdout;
@@ -104,14 +108,35 @@ export const liveLayer = Layer.succeed(OpenSsh)({
     }),
 });
 
-const remoteReadCommand = (path: string) => {
-  const quotedPath = quoteShell(path);
+export const unsafeOpenSshInternals = {
+  remoteReadCommand,
+  validateAlias,
+};
+
+function validateAlias(alias: string) {
+  if (alias.length === 0 || alias.startsWith("-")) {
+    throw new ConnectionFailed({
+      message: `Unsafe SSH alias: ${alias}`,
+    });
+  }
+}
+
+function remoteReadCommand(path: string) {
+  const quotedPath = shellPath(path);
 
   return [
     `if [ ! -e ${quotedPath} ]; then exit 2; fi`,
     `if [ ! -r ${quotedPath} ]; then exit 3; fi`,
     `cat -- ${quotedPath}`,
   ].join("; ");
+}
+
+const shellPath = (path: string) => {
+  if (path.startsWith("~/")) {
+    return `~/${quoteShell(path.slice(2))}`;
+  }
+
+  return quoteShell(path);
 };
 
 const quoteShell = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;

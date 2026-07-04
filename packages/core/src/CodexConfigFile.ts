@@ -1,4 +1,6 @@
 import { Effect, Schema } from "effect";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import * as AgentFileSystem from "./AgentFileSystem.js";
 import type { ManagedFileSnapshot } from "./ManagedFileSnapshot.js";
 import * as OpenSsh from "./OpenSsh.js";
@@ -49,6 +51,7 @@ export const readLocalConfig = Effect.fn("CodexConfigFile.readLocalConfig")(func
 ) {
   const fileSystem = yield* AgentFileSystem.AgentFileSystem;
   const snapshot = yield* fileSystem.readFile(options.configPath).pipe(
+    Effect.mapError(mapFileReadFailure),
     Effect.match({
       onFailure: (failure) =>
         ({
@@ -83,7 +86,7 @@ export const readConfig = Effect.fn("CodexConfigFile.readConfig")(function* (
 ) {
   if (options.target.type === "local") {
     return yield* readLocalConfig({
-      configPath: options.localConfigPath ?? "~/.codex/config.toml",
+      configPath: options.localConfigPath ?? join(homeDirectory(), ".codex", "config.toml"),
     });
   }
 
@@ -126,7 +129,9 @@ export const readConfig = Effect.fn("CodexConfigFile.readConfig")(function* (
  * typed `FileReadFailure` union rather than raw Node errors.
  */
 export const classifyReadFailure = (error: unknown): FileReadFailure => {
-  if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+  const failure = AgentFileSystem.classifyReadFailure(error);
+
+  if (failure instanceof AgentFileSystem.FileNotFound) {
     return new NotFound({
       message: "Codex Config File is missing",
     });
@@ -137,12 +142,34 @@ export const classifyReadFailure = (error: unknown): FileReadFailure => {
   });
 };
 
+const mapFileReadFailure = (failure: AgentFileSystem.FileReadFailure): FileReadFailure => {
+  if (failure instanceof AgentFileSystem.FileNotFound) {
+    return new NotFound({
+      message: failure.message,
+    });
+  }
+
+  return new Unreadable({
+    message: failure.message,
+  });
+};
+
+const homeDirectory = () => {
+  const directory = process.env.HOME ?? homedir();
+
+  if (directory.length === 0) {
+    throw new Error("Could not determine home directory for Codex config");
+  }
+
+  return directory;
+};
+
 /**
  * Convenience wrapper for tests or narrow call sites that want to provide a
  * file reader directly without manually composing an AgentFileSystem layer.
  */
 export const readLocalConfigWith = (
   options: LocalConfigOptions & {
-    readonly readFile: (path: string) => Effect.Effect<string, FileReadFailure>;
+    readonly readFile: (path: string) => Effect.Effect<string, AgentFileSystem.FileReadFailure>;
   },
 ) => readLocalConfig(options).pipe(Effect.provide(AgentFileSystem.layer(options.readFile)));

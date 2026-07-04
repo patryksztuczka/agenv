@@ -3,6 +3,7 @@ import { AgentFileSystem, CodexConfigFile, MachineInventory, OpenSsh } from "@ag
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { Hono } from "hono";
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -59,7 +60,7 @@ export const createApp = (options: ApiOptions) => {
 
     const snapshot = await runtime.runPromise(
       CodexConfigFile.readConfig({
-        localConfigPath: join(process.env.HOME ?? "", ".codex", "config.toml"),
+        localConfigPath: join(homeDirectory(), ".codex", "config.toml"),
         target,
       }),
     );
@@ -85,11 +86,11 @@ export const getGreeting = (name: string) =>
 const app = createApp({
   layer: Layer.mergeAll(
     MachineInventory.liveLayer({
-      sshConfigPath: join(process.env.HOME ?? "", ".ssh", "config"),
+      sshConfigPath: join(homeDirectory(), ".ssh", "config"),
     }),
     AgentFileSystem.layer((path) =>
       Effect.tryPromise({
-        catch: CodexConfigFile.classifyReadFailure,
+        catch: AgentFileSystem.classifyReadFailure,
         try: () => readFile(path, "utf8"),
       }),
     ),
@@ -114,6 +115,16 @@ const parseConfigTarget = (
 
   return undefined;
 };
+
+function homeDirectory() {
+  const directory = process.env.HOME ?? homedir();
+
+  if (directory.length === 0) {
+    throw new Error("Could not determine home directory for agenv API");
+  }
+
+  return directory;
+}
 
 export { app };
 

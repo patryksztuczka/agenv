@@ -1,5 +1,6 @@
 import { assert, describe, layer } from "@effect/vitest";
 import { Effect, Layer } from "effect";
+import { test as vitestTest } from "vitest";
 import { AgentFileSystem, CodexConfigFile, MachineInventory, OpenSsh } from "./index.js";
 
 describe("Machine Inventory", () => {
@@ -50,6 +51,35 @@ describe("Machine Inventory", () => {
     );
   });
 
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(() =>
+        Effect.succeed(
+          ["Host\tworkstation", "  HostName workstation.local", "Host workstation build-box"].join(
+            "\n",
+          ),
+        ),
+      ),
+      OpenSsh.layer({
+        resolve: (alias) =>
+          Effect.succeed(["user agent", `hostname ${alias}.local`, "port 22"].join("\n")),
+      }),
+    ),
+  )((test) => {
+    test.effect("accepts whitespace after Host and resolves each alias once", () =>
+      Effect.gen(function* () {
+        const inventory = yield* MachineInventory.load({
+          sshConfigPath: "/home/example/.ssh/config",
+        });
+
+        assert.deepStrictEqual(
+          inventory.machines.map((machine) => machine.alias),
+          ["workstation", "build-box"],
+        );
+      }),
+    );
+  });
+
   let readCount = 0;
 
   layer(
@@ -91,7 +121,7 @@ describe("Machine Inventory", () => {
     Layer.mergeAll(
       AgentFileSystem.layer(() =>
         Effect.fail(
-          new CodexConfigFile.NotFound({
+          new AgentFileSystem.FileNotFound({
             message: "unused",
           }),
         ),
@@ -131,7 +161,7 @@ describe("Machine Inventory", () => {
     Layer.mergeAll(
       AgentFileSystem.layer(() =>
         Effect.fail(
-          new CodexConfigFile.NotFound({
+          new AgentFileSystem.FileNotFound({
             message: "unused",
           }),
         ),
@@ -168,11 +198,42 @@ describe("Machine Inventory", () => {
   });
 });
 
+describe("OpenSSH", () => {
+  vitestTest("rejects SSH aliases that could be parsed as options", () => {
+    assert.throws(
+      () => OpenSsh.unsafeOpenSshInternals.validateAlias("-oProxyCommand=ignored"),
+      OpenSsh.ConnectionFailed,
+    );
+  });
+
+  vitestTest("allows remote home expansion while quoting the rest of the read path", () => {
+    assert.strictEqual(
+      OpenSsh.unsafeOpenSshInternals.remoteReadCommand("~/.codex/config.toml"),
+      [
+        "if [ ! -e ~/'.codex/config.toml' ]; then exit 2; fi",
+        "if [ ! -r ~/'.codex/config.toml' ]; then exit 3; fi",
+        "cat -- ~/'.codex/config.toml'",
+      ].join("; "),
+    );
+  });
+
+  vitestTest("quotes non-home remote read paths as a single shell argument", () => {
+    assert.strictEqual(
+      OpenSsh.unsafeOpenSshInternals.remoteReadCommand("/tmp/agent's config.toml"),
+      [
+        "if [ ! -e '/tmp/agent'\\''s config.toml' ]; then exit 2; fi",
+        "if [ ! -r '/tmp/agent'\\''s config.toml' ]; then exit 3; fi",
+        "cat -- '/tmp/agent'\\''s config.toml'",
+      ].join("; "),
+    );
+  });
+});
+
 describe("Managed File Snapshots", () => {
   layer(
     AgentFileSystem.layer(() =>
       Effect.fail(
-        new CodexConfigFile.NotFound({
+        new AgentFileSystem.FileNotFound({
           message: "No such file or directory",
         }),
       ),
@@ -199,7 +260,7 @@ describe("Managed File Snapshots", () => {
     Layer.mergeAll(
       AgentFileSystem.layer(() =>
         Effect.fail(
-          new CodexConfigFile.NotFound({
+          new AgentFileSystem.FileNotFound({
             message: "unused",
           }),
         ),
@@ -239,7 +300,7 @@ describe("Managed File Snapshots", () => {
     Layer.mergeAll(
       AgentFileSystem.layer(() =>
         Effect.fail(
-          new CodexConfigFile.NotFound({
+          new AgentFileSystem.FileNotFound({
             message: "unused",
           }),
         ),

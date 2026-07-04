@@ -11,11 +11,20 @@ export type SnapshotState = "present" | "missing" | "unreadable" | "connection-f
  * `contents` is present only when the file is readable. Empty string contents
  * still mean `state: "present"`, not missing.
  */
-export interface ManagedFileSnapshot {
+interface ManagedFileSnapshotBase {
   readonly configFamily: "codex";
   readonly managedFile: "config.toml";
   readonly path: string;
-  readonly state: SnapshotState;
-  readonly contents?: string;
-  readonly error?: string;
 }
+
+export type ManagedFileSnapshot =
+  | (ManagedFileSnapshotBase & {
+      readonly contents: string;
+      readonly error?: never;
+      readonly state: "present";
+    })
+  | (ManagedFileSnapshotBase & {
+      readonly contents?: never;
+      readonly error: string;
+      readonly state: Exclude<SnapshotState, "present">;
+    });
