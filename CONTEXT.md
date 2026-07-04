@@ -64,6 +64,11 @@ _Avoid_: Codex settings, Codex state
 The presentation of a Managed File's native contents without advice, linting, or interpretation.
 _Avoid_: hints, linting, validation
 
+**Package Manager Config Diagnostics**:
+A redacted diagnostic view of package-manager configuration that is safe to
+include in logs, transcripts, CI output, and bug reports.
+_Avoid_: raw package-manager config dump, unfiltered diagnostic output
+
 **Visibility**:
 The ability to list Syncable Hosts and display selected Managed Files from the current machine or an SSH-Known Host without changing them.
 _Avoid_: discovery, sync, inspection
