@@ -105,7 +105,10 @@ export const liveLayer = Layer.succeed(OpenSsh)({
       try: async () => {
         validateAlias(alias);
 
-        const result = await execFilePromise("ssh", [alias, "sh", "-lc", remoteReadCommand(path)]);
+        const result = await execFilePromise("ssh", [
+          alias,
+          remoteShellCommand(remoteReadCommand(path)),
+        ]);
 
         return result.stdout;
       },
@@ -132,9 +135,9 @@ export const liveLayer = Layer.succeed(OpenSsh)({
 
         await execFilePromise("ssh", [
           alias,
-          "sh",
-          "-lc",
-          remoteWriteCommand(path, Buffer.from(contents, "utf8").toString("base64")),
+          remoteShellCommand(
+            remoteWriteCommand(path, Buffer.from(contents, "utf8").toString("base64")),
+          ),
         ]);
       },
     }),
@@ -142,6 +145,7 @@ export const liveLayer = Layer.succeed(OpenSsh)({
 
 export const unsafeOpenSshInternals = {
   remoteReadCommand,
+  remoteShellCommand,
   remoteWriteCommand,
   validateAlias,
 };
@@ -176,6 +180,10 @@ function remoteWriteCommand(path: string, base64Contents: string) {
     `if [ -e ${quotedPath} ]; then chmod --reference=${quotedPath} "$tmp" 2>/dev/null || true; else chmod 600 "$tmp"; fi`,
     `mv -f -- "$tmp" ${quotedPath}`,
   ].join("; ");
+}
+
+function remoteShellCommand(script: string) {
+  return `sh -lc ${quoteShell(script)}`;
 }
 
 const shellPath = (path: string) => {
