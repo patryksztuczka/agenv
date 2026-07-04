@@ -434,10 +434,36 @@ describe("Codex Config Diff Preview", () => {
       });
 
       assert.strictEqual(preview.reason, null);
+      assert.strictEqual(preview.changed, true);
       assert.match(preview.diff ?? "", /--- \/home\/example\/\.codex\/config\.toml/);
       assert.match(preview.diff ?? "", /\+\+\+ workstation:~\/\.codex\/config\.toml/);
       assert.match(preview.diff ?? "", /-approval_policy = "on-request"/);
       assert.match(preview.diff ?? "", /\+approval_policy = "never"/);
+    }),
+  );
+
+  it.effect("reports no changes when local and host snapshots are identical", () =>
+    Effect.gen(function* () {
+      const preview = yield* CodexConfigDiff.preview({
+        left: {
+          configFamily: "codex",
+          contents: 'model = "same"\n',
+          managedFile: "config.toml",
+          path: "/home/example/.codex/config.toml",
+          state: "present",
+        },
+        right: {
+          configFamily: "codex",
+          contents: 'model = "same"\n',
+          managedFile: "config.toml",
+          path: "workstation:~/.codex/config.toml",
+          state: "present",
+        },
+      });
+
+      assert.strictEqual(preview.changed, false);
+      assert.strictEqual(preview.diff, null);
+      assert.strictEqual(preview.reason, "no changes");
     }),
   );
 
@@ -460,6 +486,7 @@ describe("Codex Config Diff Preview", () => {
         },
       });
 
+      assert.strictEqual(preview.changed, true);
       assert.strictEqual(preview.diff, null);
       assert.strictEqual(preview.reason, "left snapshot is missing");
     }),

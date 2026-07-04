@@ -15,6 +15,7 @@ export interface PreviewOptions {
 }
 
 export interface Preview {
+  readonly changed: boolean;
   readonly diff: string | null;
   readonly left: SnapshotMetadata;
   readonly reason: string | null;
@@ -45,6 +46,7 @@ const makePreview = (options: PreviewOptions) => {
 
   if (options.left.state !== "present") {
     return {
+      changed: true,
       diff: null,
       left,
       reason: `left snapshot is ${options.left.state}`,
@@ -54,6 +56,7 @@ const makePreview = (options: PreviewOptions) => {
 
   if (options.right.state !== "present") {
     return {
+      changed: true,
       diff: null,
       left,
       reason: `right snapshot is ${options.right.state}`,
@@ -61,7 +64,18 @@ const makePreview = (options: PreviewOptions) => {
     } satisfies Preview;
   }
 
+  if (options.left.contents === options.right.contents) {
+    return {
+      changed: false,
+      diff: null,
+      left,
+      reason: "no changes",
+      right,
+    } satisfies Preview;
+  }
+
   return {
+    changed: true,
     diff: unifiedDiff({
       leftContents: options.left.contents,
       leftPath: options.left.path,
