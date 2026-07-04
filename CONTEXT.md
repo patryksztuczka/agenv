@@ -29,12 +29,20 @@ The selected flow of agent environment changes for a sync operation, either from
 _Avoid_: bidirectional sync, replication
 
 **Push**:
-A sync operation that applies selected agent environment changes from the current machine to an SSH-Known Machine.
+A sync operation that applies selected agent environment changes from the current machine to an SSH-Known Host.
 _Avoid_: upload, deploy
 
 **Pull**:
-A sync operation that applies selected agent environment changes from an SSH-Known Machine to the current machine.
+A sync operation that applies selected agent environment changes from an SSH-Known Host to the current machine.
 _Avoid_: download, import
+
+**Preview**:
+The non-mutating presentation of what an agenv operation would change if applied.
+_Avoid_: dry run, plan
+
+**Apply**:
+The explicit mutating execution of a previously previewable agenv operation.
+_Avoid_: run, execute, confirm
 
 **Config Family**:
 A coherent group of native agent environment files owned by one agent tool or ecosystem.
@@ -61,7 +69,7 @@ The ability to list Syncable Hosts and display selected Managed Files from the c
 _Avoid_: discovery, sync, inspection
 
 **Managed File Snapshot**:
-The current readable state of a Managed File on the current machine or an SSH-Known Machine, including enough metadata for clients to render missing and unreadable states without guessing.
+The current readable state of a Managed File on the current machine or an SSH-Known Host, including enough metadata for clients to render missing and unreadable states without guessing.
 _Avoid_: file response, config blob, read result
 
 **Snapshot State**:
