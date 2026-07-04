@@ -8,24 +8,24 @@ agenv is the control plane for agent environments: the settings, tools, and loca
 The collection of agent-related configuration, tools, skills, MCP servers, prompts, profiles, permissions, and local overrides present on a machine.
 _Avoid_: setup, dotfiles, agent state
 
-**SSH-Known Machine**:
-A remote machine that agenv can identify through the user's SSH configuration.
-_Avoid_: discovered machine, scanned host, remote machine
+**SSH-Known Host**:
+A host entry that agenv can identify through the user's SSH configuration.
+_Avoid_: discovered machine, scanned machine, remote machine
 
-**Machine Inventory**:
-The set of machines agenv can inspect as possible agent environment targets, with each entry tied to the source that made it visible.
-_Avoid_: host list, server list, fleet
+**Host Inventory**:
+The set of SSH-Known Hosts agenv can inspect as possible agent environment targets, with each entry tied to the source that made it visible.
+_Avoid_: machine inventory, server list, fleet
 
-**Syncable Machine**:
-An SSH-Known Machine that agenv can present as an agent environment target.
-_Avoid_: proper machine, valid host, server
+**Syncable Host**:
+An SSH-Known Host that agenv can present as an agent environment target.
+_Avoid_: proper machine, valid machine, server
 
-**Resolved Machine Metadata**:
-The minimal SSH connection details agenv can report for a Syncable Machine, such as alias, host name, user, port, and source.
-_Avoid_: machine profile, host details
+**Resolved Host Metadata**:
+The minimal SSH connection details agenv can report for a Syncable Host, such as alias, host name, user, port, and source.
+_Avoid_: host profile, machine details
 
 **Sync Direction**:
-The selected flow of agent environment changes for a sync operation, either from the current machine to an SSH-Known Machine or from an SSH-Known Machine to the current machine.
+The selected flow of agent environment changes for a sync operation, either from the current machine to an SSH-Known Host or from an SSH-Known Host to the current machine.
 _Avoid_: bidirectional sync, replication
 
 **Push**:
@@ -57,7 +57,7 @@ The presentation of a Managed File's native contents without advice, linting, or
 _Avoid_: hints, linting, validation
 
 **Visibility**:
-The ability to list Syncable Machines and display selected Managed Files from the current machine or an SSH-Known Machine without changing them.
+The ability to list Syncable Hosts and display selected Managed Files from the current machine or an SSH-Known Host without changing them.
 _Avoid_: discovery, sync, inspection
 
 **Managed File Snapshot**:
