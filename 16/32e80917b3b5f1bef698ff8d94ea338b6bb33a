@@ -1,0 +1,22 @@
+packages/core/src/CodexConfigFile.ts
+  s_532d284413d182::t_3c798fe2a0d153 241-247
+  s_532d284413d182::t_a49f6e3af2fa9d 227-240,248
+apps/cli/src/index.test.ts
+  s_532d284413d182::t_0e9189a1b93465 685-856
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1632e80917b3b5f1bef698ff8d94ea338b6bb33a",
+  "prompts": {},
+  "sessions": {
+    "s_532d284413d182": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f2e81-39fd-7732-be2c-e9461fa14313",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Patryk Sztuczka <patryk.sztuczka00@gmail.com>"
+    }
+  }
+}
