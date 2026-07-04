@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import {
   AgentFileSystem,
+  CodexConfigDiff,
   CodexConfigFile,
   MachineInventory,
   ManagedFileSnapshot,
   OpenSsh,
 } from "@agenv/core";
+import type { CodexConfigDiffPreview, CodexConfigDiffSnapshotMetadata } from "@agenv/core";
 import { Console, Effect, FileSystem, Layer, Option, Path, Ref, Stdio, Terminal } from "effect";
 import type { Console as EffectConsole } from "effect/Console";
 import { CliOutput, Command, Flag } from "effect/unstable/cli";
@@ -105,8 +107,39 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
   );
   const codex = Command.make("codex").pipe(Command.withSubcommands([configCommand]));
   const inspect = Command.make("inspect").pipe(Command.withSubcommands([codex]));
+  const diffConfigCommand = Command.make(
+    "config",
+    {
+      host: Flag.string("host"),
+      json: jsonFlag,
+    },
+    (options) =>
+      Effect.gen(function* () {
+        const left = yield* CodexConfigFile.readConfig({
+          target: {
+            type: "local",
+          },
+        });
+        const right = yield* CodexConfigFile.readConfig({
+          target: {
+            alias: options.host,
+            type: "ssh",
+          },
+        });
+        const preview = yield* CodexConfigDiff.preview({
+          left,
+          right,
+        });
+        const output = withDiffTargets(preview, options.host);
+        const stdout = options.json ? renderJson(output) : renderDiffPreview(output);
 
-  return Command.make("agenv").pipe(Command.withSubcommands([list, inspect]));
+        yield* Ref.set(resultRef, success(stdout));
+      }),
+  );
+  const diffCodex = Command.make("codex").pipe(Command.withSubcommands([diffConfigCommand]));
+  const diff = Command.make("diff").pipe(Command.withSubcommands([diffCodex]));
+
+  return Command.make("agenv").pipe(Command.withSubcommands([list, inspect, diff]));
 };
 
 const success = (stdout: string): CliResult => ({
@@ -171,6 +204,77 @@ const renderSnapshot = (
 
   return [...lines, `Error: ${snapshot.error}`].join("\n");
 };
+
+interface LocalDiffSnapshotMetadata extends CodexConfigDiffSnapshotMetadata {
+  readonly target: {
+    readonly type: "local";
+  };
+}
+
+interface SshDiffSnapshotMetadata extends CodexConfigDiffSnapshotMetadata {
+  readonly target: {
+    readonly alias: string;
+    readonly type: "ssh";
+  };
+}
+
+interface DiffPreviewOutput {
+  readonly diff: string | null;
+  readonly left: LocalDiffSnapshotMetadata;
+  readonly reason: string | null;
+  readonly right: SshDiffSnapshotMetadata;
+}
+
+const withDiffTargets = (preview: CodexConfigDiffPreview, host: string): DiffPreviewOutput => ({
+  diff: preview.diff,
+  left: {
+    ...preview.left,
+    target: {
+      type: "local",
+    },
+  },
+  reason: preview.reason,
+  right: {
+    ...preview.right,
+    target: {
+      alias: host,
+      type: "ssh",
+    },
+  },
+});
+
+const renderDiffPreview = (preview: DiffPreviewOutput) => {
+  const lines = [
+    "Codex Config Diff",
+    "Left: local",
+    "Right: host",
+    `Host: ${preview.right.target.alias}`,
+  ];
+
+  if (preview.diff !== null) {
+    return [...lines, "", preview.diff].join("\n");
+  }
+
+  return [
+    ...lines,
+    "",
+    `No textual diff available: ${preview.reason}`,
+    "",
+    ...renderDiffSnapshot("Left", preview.left),
+    "",
+    ...renderDiffSnapshot("Right", preview.right),
+  ].join("\n");
+};
+
+const renderDiffSnapshot = (
+  label: string,
+  snapshot: LocalDiffSnapshotMetadata | SshDiffSnapshotMetadata,
+) => [
+  label,
+  `State: ${snapshot.state}`,
+  `Path: ${snapshot.path}`,
+  ...(snapshot.error === undefined ? [] : [`Error: ${snapshot.error}`]),
+];
 
 const liveLayer = Layer.mergeAll(
   AgentFileSystem.layer((path) =>
