@@ -1,0 +1,26 @@
+pnpm-workspace.yaml
+  s_35f623da436ba5::t_cfadca9dbfba4a 4,6-7
+  s_35f623da436ba5::t_f581e0f147726f 5
+INSTALL.md
+  s_35f623da436ba5::t_b8e3c127a1c70b 25,56-57,60-67
+  s_35f623da436ba5::t_cfadca9dbfba4a 1-12,19-24,26-32,34-55
+  s_35f623da436ba5::t_e26bca7fe1a5ed 13-18,33,58-59
+.node-version
+  s_35f623da436ba5::t_cfadca9dbfba4a 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "d2db6b378ddf6da13f54469aea50aec7514997ba",
+  "prompts": {},
+  "sessions": {
+    "s_35f623da436ba5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f2e81-9228-7a80-956a-d0b8a07cca13",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Patryk Sztuczka <patryk.sztuczka00@gmail.com>"
+    }
+  }
+}
