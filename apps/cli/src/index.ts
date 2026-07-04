@@ -13,8 +13,9 @@ import type { Console as EffectConsole } from "effect/Console";
 import { CliOutput, Command, Flag } from "effect/unstable/cli";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { readFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export interface CliResult {
@@ -67,6 +68,7 @@ export const runCli = Effect.fn("Cli.runCli")(function* (args: readonly string[]
 
 const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
   const jsonFlag = Flag.boolean("json");
+  const applyFlag = Flag.boolean("apply");
 
   const hosts = Command.make("hosts", { json: jsonFlag }, (config) =>
     Effect.gen(function* () {
@@ -139,13 +141,56 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
   const diffCodex = Command.make("codex").pipe(Command.withSubcommands([diffConfigCommand]));
   const diff = Command.make("diff").pipe(Command.withSubcommands([diffCodex]));
 
-  return Command.make("agenv").pipe(Command.withSubcommands([list, inspect, diff]));
+  const syncConfigCommand = (direction: CodexConfigFile.SyncDirection) =>
+    Command.make(
+      "config",
+      {
+        apply: applyFlag,
+        host: Flag.string("host").pipe(Flag.optional),
+        json: jsonFlag,
+      },
+      (options) =>
+        Effect.gen(function* () {
+          const host = Option.getOrUndefined(options.host);
+
+          if (host === undefined) {
+            yield* Ref.set(resultRef, failure("--host is required for push/pull.", 2));
+            return;
+          }
+
+          const result = yield* CodexConfigFile.syncConfig({
+            direction,
+            host,
+            mode: options.apply ? "apply" : "preview",
+          });
+          const stdout = options.json ? renderJson(result) : renderSyncResult(result);
+          const exitCode = result.error === undefined ? 0 : 1;
+
+          yield* Ref.set(resultRef, { exitCode, stderr: "", stdout });
+        }),
+    );
+  const pushCodex = Command.make("codex").pipe(
+    Command.withSubcommands([syncConfigCommand("push")]),
+  );
+  const push = Command.make("push").pipe(Command.withSubcommands([pushCodex]));
+  const pullCodex = Command.make("codex").pipe(
+    Command.withSubcommands([syncConfigCommand("pull")]),
+  );
+  const pull = Command.make("pull").pipe(Command.withSubcommands([pullCodex]));
+
+  return Command.make("agenv").pipe(Command.withSubcommands([list, inspect, diff, push, pull]));
 };
 
 const success = (stdout: string): CliResult => ({
   exitCode: 0,
   stderr: "",
   stdout: stdout.endsWith("\n") ? stdout : `${stdout}\n`,
+});
+
+const failure = (stderr: string, exitCode: number): CliResult => ({
+  exitCode,
+  stderr: stderr.endsWith("\n") ? stderr : `${stderr}\n`,
+  stdout: "",
 });
 
 const emptyResult: CliResult = {
@@ -203,6 +248,26 @@ const renderSnapshot = (
   }
 
   return [...lines, `Error: ${snapshot.error}`].join("\n");
+};
+
+const renderSyncResult = (result: CodexConfigFile.SyncConfigResult) => {
+  const lines = [];
+
+  if (result.diff.length > 0) {
+    lines.push(result.diff.trimEnd());
+  } else {
+    lines.push("No changes.");
+  }
+
+  if (result.error !== undefined) {
+    lines.push(result.error);
+  } else if (result.mode === "apply" && result.applied) {
+    lines.push("Applied and verified.");
+  } else if (result.mode === "apply") {
+    lines.push("No changes.");
+  }
+
+  return `${lines.join("\n")}\n`;
 };
 
 interface LocalDiffSnapshotMetadata extends CodexConfigDiffSnapshotMetadata {
@@ -277,11 +342,26 @@ const renderDiffSnapshot = (
 ];
 
 const liveLayer = Layer.mergeAll(
-  AgentFileSystem.layer((path) =>
-    Effect.tryPromise({
-      catch: AgentFileSystem.classifyReadFailure,
-      try: () => readFile(path, "utf8"),
-    }),
+  AgentFileSystem.layer(
+    (path) =>
+      Effect.tryPromise({
+        catch: AgentFileSystem.classifyReadFailure,
+        try: () => readFile(path, "utf8"),
+      }),
+    (path, contents) =>
+      Effect.tryPromise({
+        catch: AgentFileSystem.classifyReadFailure,
+        try: async () => {
+          await mkdir(dirname(path), {
+            recursive: true,
+          });
+          const temporaryPath = join(dirname(path), `.agenv-config.toml.${process.pid}.tmp`);
+          await writeFile(temporaryPath, contents, {
+            mode: 0o600,
+          });
+          await rename(temporaryPath, path);
+        },
+      }),
   ),
   OpenSsh.liveLayer,
   MachineInventory.liveLayer({
