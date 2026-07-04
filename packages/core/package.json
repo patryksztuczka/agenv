@@ -1,24 +1,25 @@
 {
-  "name": "@agenv/api",
+  "name": "@agenv/core",
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@agenv/core": "workspace:*",
-    "@hono/node-server": "^1.19.6",
-    "effect": "4.0.0-beta.93",
-    "hono": "^4.12.27"
+    "effect": "4.0.0-beta.93"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
-    "tsx": "^4.23.0",
     "typescript": "^6.0.3"
   }
 }

@@ -1,5 +1,9 @@
-import { strictEqual } from "node:assert";
+import { assert, it } from "@effect/vitest";
 import { Effect } from "effect";
 import { renderMessage } from "./index.js";
 
-strictEqual(await Effect.runPromise(renderMessage("CLI")), "Hello, CLI!");
+it.effect("renders CLI messages", () =>
+  Effect.gen(function* () {
+    assert.strictEqual(yield* renderMessage("CLI"), "Hello, CLI!");
+  }),
+);
