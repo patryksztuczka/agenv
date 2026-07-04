@@ -1,7 +1,13 @@
-import { assert, describe, layer } from "@effect/vitest";
+import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import { test as vitestTest } from "vitest";
-import { AgentFileSystem, CodexConfigFile, MachineInventory, OpenSsh } from "./index.js";
+import {
+  AgentFileSystem,
+  CodexConfigDiff,
+  CodexConfigFile,
+  MachineInventory,
+  OpenSsh,
+} from "./index.js";
 
 describe("Machine Inventory", () => {
   layer(
@@ -405,4 +411,57 @@ describe("Managed File Snapshots", () => {
       }),
     );
   });
+});
+
+describe("Codex Config Diff Preview", () => {
+  it.effect("produces a textual diff when local and host snapshots are present", () =>
+    Effect.gen(function* () {
+      const preview = yield* CodexConfigDiff.preview({
+        left: {
+          configFamily: "codex",
+          contents: 'model = "gpt-5"\napproval_policy = "on-request"\n',
+          managedFile: "config.toml",
+          path: "/home/example/.codex/config.toml",
+          state: "present",
+        },
+        right: {
+          configFamily: "codex",
+          contents: 'model = "gpt-5"\napproval_policy = "never"\n',
+          managedFile: "config.toml",
+          path: "workstation:~/.codex/config.toml",
+          state: "present",
+        },
+      });
+
+      assert.strictEqual(preview.reason, null);
+      assert.match(preview.diff ?? "", /--- \/home\/example\/\.codex\/config\.toml/);
+      assert.match(preview.diff ?? "", /\+\+\+ workstation:~\/\.codex\/config\.toml/);
+      assert.match(preview.diff ?? "", /-approval_policy = "on-request"/);
+      assert.match(preview.diff ?? "", /\+approval_policy = "never"/);
+    }),
+  );
+
+  it.effect("reports snapshot states instead of creating an empty-file diff", () =>
+    Effect.gen(function* () {
+      const preview = yield* CodexConfigDiff.preview({
+        left: {
+          configFamily: "codex",
+          error: "No such file or directory",
+          managedFile: "config.toml",
+          path: "/home/example/.codex/config.toml",
+          state: "missing",
+        },
+        right: {
+          configFamily: "codex",
+          contents: 'model = "gpt-5"\n',
+          managedFile: "config.toml",
+          path: "workstation:~/.codex/config.toml",
+          state: "present",
+        },
+      });
+
+      assert.strictEqual(preview.diff, null);
+      assert.strictEqual(preview.reason, "left snapshot is missing");
+    }),
+  );
 });

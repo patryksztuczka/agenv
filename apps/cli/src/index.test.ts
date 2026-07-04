@@ -8,7 +8,7 @@ describe("CLI Host Visibility", () => {
     Layer.mergeAll(
       AgentFileSystem.layer((path) => {
         if (path === "/home/example/.codex/config.toml") {
-          return Effect.succeed('model = "gpt-5"');
+          return Effect.succeed('model = "gpt-4"');
         }
 
         assert.strictEqual(path, "/home/example/.ssh/config");
@@ -81,6 +81,7 @@ describe("CLI Host Visibility", () => {
         assert.match(result.stdout, /SUBCOMMANDS/);
         assert.match(result.stdout, /list/);
         assert.match(result.stdout, /inspect/);
+        assert.match(result.stdout, /diff/);
         assert.strictEqual(result.stderr, "");
       }),
     );
@@ -115,7 +116,7 @@ describe("CLI Host Visibility", () => {
         assert.strictEqual(result.exitCode, 0);
         assert.deepStrictEqual(JSON.parse(result.stdout), {
           configFamily: "codex",
-          contents: 'model = "gpt-5"',
+          contents: 'model = "gpt-4"',
           managedFile: "config.toml",
           path: "/home/example/.codex/config.toml",
           state: "present",
@@ -133,6 +134,66 @@ describe("CLI Host Visibility", () => {
         assert.match(result.stdout, /State: present/);
         assert.match(result.stdout, /Path: workstation:~\/\.codex\/config\.toml/);
         assert.match(result.stdout, /model = "gpt-5"/);
+      }),
+    );
+
+    test.effect("renders a unified Codex config diff for a Host alias", () =>
+      Effect.gen(function* () {
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const result = yield* runCli(["diff", "codex", "config", "--host", "workstation"]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.match(result.stdout, /Codex Config Diff/);
+        assert.match(result.stdout, /Host: workstation/);
+        assert.match(result.stdout, /--- \/home\/example\/\.codex\/config\.toml/);
+        assert.match(result.stdout, /\+\+\+ workstation:~\/\.codex\/config\.toml/);
+        assert.match(result.stdout, /-model = "gpt-4"/);
+        assert.match(result.stdout, /\+model = "gpt-5"/);
+      }),
+    );
+
+    test.effect("renders structured Codex config diff output for agents", () =>
+      Effect.gen(function* () {
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const result = yield* runCli([
+          "diff",
+          "codex",
+          "config",
+          "--host",
+          "workstation",
+          "--json",
+        ]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        const body = JSON.parse(result.stdout);
+        assert.strictEqual(result.exitCode, 0);
+        assert.strictEqual(body.reason, null);
+        assert.strictEqual(body.left.path, "/home/example/.codex/config.toml");
+        assert.strictEqual(body.left.target.type, "local");
+        assert.strictEqual(body.right.path, "workstation:~/.codex/config.toml");
+        assert.strictEqual(body.right.target.alias, "workstation");
+        assert.match(body.diff, /--- \/home\/example\/\.codex\/config\.toml/);
       }),
     );
   });
@@ -414,6 +475,32 @@ describe("CLI Host Visibility", () => {
           path: "/home/example/.codex/config.toml",
           state: "missing",
         });
+      }),
+    );
+
+    test.effect("renders missing snapshots as a diff state summary", () =>
+      Effect.gen(function* () {
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const result = yield* runCli(["diff", "codex", "config", "--host", "workstation"]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.match(result.stdout, /Codex Config Diff/);
+        assert.match(result.stdout, /No textual diff available: left snapshot is missing/);
+        assert.match(result.stdout, /Left/);
+        assert.match(result.stdout, /State: missing/);
+        assert.isFalse(/^--- /m.test(result.stdout));
+        assert.isFalse(/^\+\+\+ /m.test(result.stdout));
       }),
     );
   });
