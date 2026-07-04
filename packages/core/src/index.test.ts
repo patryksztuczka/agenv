@@ -80,6 +80,37 @@ describe("Machine Inventory", () => {
     );
   });
 
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(() =>
+        Effect.succeed(
+          [
+            "Host dev # temporary alias",
+            "  HostName dev.local",
+            'Host "quoted#alias" # comment words',
+          ].join("\n"),
+        ),
+      ),
+      OpenSsh.layer({
+        resolve: (alias) =>
+          Effect.succeed(["user agent", `hostname ${alias}.local`, "port 22"].join("\n")),
+      }),
+    ),
+  )((test) => {
+    test.effect("ignores inline Host comments before resolving aliases", () =>
+      Effect.gen(function* () {
+        const inventory = yield* MachineInventory.load({
+          sshConfigPath: "/home/example/.ssh/config",
+        });
+
+        assert.deepStrictEqual(
+          inventory.machines.map((machine) => machine.alias),
+          ["dev", '"quoted#alias"'],
+        );
+      }),
+    );
+  });
+
   let readCount = 0;
 
   layer(
@@ -230,6 +261,15 @@ describe("OpenSSH", () => {
 });
 
 describe("Managed File Snapshots", () => {
+  const originalHome = process.env.HOME;
+  const restoreHome = () => {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+  };
+
   layer(
     AgentFileSystem.layer(() =>
       Effect.fail(
@@ -253,6 +293,36 @@ describe("Managed File Snapshots", () => {
           state: "missing",
         });
       }),
+    );
+  });
+
+  layer(AgentFileSystem.layer(() => Effect.succeed("unused")))((test) => {
+    test.effect("reports unreadable when the local config default path cannot be resolved", () =>
+      Effect.gen(function* () {
+        process.env.HOME = "";
+
+        const snapshot = yield* CodexConfigFile.readConfig({
+          target: {
+            type: "local",
+          },
+        });
+
+        restoreHome();
+
+        assert.deepStrictEqual(snapshot, {
+          configFamily: "codex",
+          error: "Could not determine home directory for Codex config",
+          managedFile: "config.toml",
+          path: "<unknown>",
+          state: "unreadable",
+        });
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            restoreHome();
+          }),
+        ),
+      ),
     );
   });
 

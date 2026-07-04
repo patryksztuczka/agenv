@@ -152,11 +152,39 @@ const concreteHostAliases = (sshConfig: string) => [
       .flatMap((line) => {
         const match = /^host\s+(.+)$/i.exec(line);
 
-        return match === null ? [] : (match[1] ?? "").trim().split(/\s+/);
+        return match === null
+          ? []
+          : stripInlineComment(match[1] ?? "")
+              .trim()
+              .split(/\s+/);
       })
       .filter((alias) => alias.length > 0 && !/[*?!]/.test(alias)),
   ),
 ];
+
+const stripInlineComment = (value: string) => {
+  let quote: '"' | "'" | undefined;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+
+    if (character === quote) {
+      quote = undefined;
+      continue;
+    }
+
+    if (quote === undefined && (character === '"' || character === "'")) {
+      quote = character;
+      continue;
+    }
+
+    if (quote === undefined && character === "#") {
+      return value.slice(0, index);
+    }
+  }
+
+  return value;
+};
 
 const parseOpenSshResolution = (output: string) => {
   const fields = new Map(

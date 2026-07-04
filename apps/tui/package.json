@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "NODE_OPTIONS=--experimental-ffi tsx src/index.ts",
+    "dev": "node --experimental-ffi --import tsx src/index.ts",
     "start": "node --experimental-ffi dist/index.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"

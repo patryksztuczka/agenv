@@ -85,8 +85,29 @@ export const readConfig = Effect.fn("CodexConfigFile.readConfig")(function* (
   options: ReadConfigOptions,
 ) {
   if (options.target.type === "local") {
+    const configPathEffect =
+      options.localConfigPath === undefined
+        ? defaultLocalConfigPath.pipe(
+            Effect.match({
+              onFailure: (failure) => failure,
+              onSuccess: (path) => path,
+            }),
+          )
+        : Effect.succeed(options.localConfigPath);
+    const configPath = yield* configPathEffect;
+
+    if (configPath instanceof Unreadable) {
+      return {
+        configFamily: "codex",
+        error: configPath.message,
+        managedFile: "config.toml",
+        path: "<unknown>",
+        state: "unreadable",
+      } satisfies ManagedFileSnapshot;
+    }
+
     return yield* readLocalConfig({
-      configPath: options.localConfigPath ?? join(homeDirectory(), ".codex", "config.toml"),
+      configPath,
     });
   }
 
@@ -153,6 +174,17 @@ const mapFileReadFailure = (failure: AgentFileSystem.FileReadFailure): FileReadF
     message: failure.message,
   });
 };
+
+const defaultLocalConfigPath = Effect.try({
+  catch: (error) =>
+    new Unreadable({
+      message:
+        error instanceof Error
+          ? error.message
+          : "Could not determine home directory for Codex config",
+    }),
+  try: () => join(homeDirectory(), ".codex", "config.toml"),
+});
 
 const homeDirectory = () => {
   const directory = process.env.HOME ?? homedir();
