@@ -12,7 +12,7 @@ describe("CLI Host Visibility", () => {
         }
 
         assert.strictEqual(path, "/home/example/.ssh/config");
-        return Effect.succeed("Host workstation");
+        return Effect.succeed("Host workstation broken-host");
       }),
       OpenSsh.layer({
         readFile: (alias, path) => {
@@ -22,6 +22,14 @@ describe("CLI Host Visibility", () => {
           return Effect.succeed('model = "gpt-5"\n');
         },
         resolve: (alias) => {
+          if (alias === "broken-host") {
+            return Effect.fail(
+              new OpenSsh.ConnectionFailed({
+                message: "ssh: Could not resolve hostname broken-host",
+              }),
+            );
+          }
+
           assert.strictEqual(alias, "workstation");
 
           return Effect.succeed(
@@ -49,7 +57,17 @@ describe("CLI Host Visibility", () => {
                 kind: "ssh-config",
                 path: "/home/example/.ssh/config",
               },
+              state: "resolved",
               user: "agent",
+            },
+            {
+              alias: "broken-host",
+              error: "ssh: Could not resolve hostname broken-host",
+              source: {
+                kind: "ssh-config",
+                path: "/home/example/.ssh/config",
+              },
+              state: "resolution-failed",
             },
           ],
         });
@@ -67,7 +85,10 @@ describe("CLI Host Visibility", () => {
         assert.match(result.stdout, /workstation\.local/);
         assert.match(result.stdout, /agent/);
         assert.match(result.stdout, /2222/);
+        assert.match(result.stdout, /resolution-failed/);
+        assert.match(result.stdout, /Could not resolve hostname broken-host/);
         assert.match(result.stdout, /ssh-config/);
+        assert.strictEqual(result.stderr, "");
       }),
     );
 

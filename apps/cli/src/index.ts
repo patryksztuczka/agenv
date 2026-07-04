@@ -209,14 +209,20 @@ const renderHosts = (inventory: MachineInventory.Inventory) => {
     return "Hosts\nNo SSH-known Hosts found.\n";
   }
 
-  const rows = inventory.machines.map((host) => [
-    host.alias,
-    host.hostName,
-    host.user,
-    String(host.port),
-    `${host.source.kind}:${host.source.path}`,
-  ]);
-  const header = ["Alias", "HostName", "User", "Port", "Source"];
+  const rows = inventory.machines.map((host) =>
+    host.state === "resolved"
+      ? [
+          host.alias,
+          host.state,
+          host.hostName,
+          host.user,
+          String(host.port),
+          `${host.source.kind}:${host.source.path}`,
+          "",
+        ]
+      : [host.alias, host.state, "", "", "", `${host.source.kind}:${host.source.path}`, host.error],
+  );
+  const header = ["Alias", "State", "HostName", "User", "Port", "Source", "Error"];
   const widths = header.map((heading, index) =>
     Math.max(heading.length, ...rows.map((row) => row[index]?.length ?? 0)),
   );

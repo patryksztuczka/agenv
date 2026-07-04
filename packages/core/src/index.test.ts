@@ -49,6 +49,7 @@ describe("Machine Inventory", () => {
                 kind: "ssh-config",
                 path: "/home/example/.ssh/config",
               },
+              state: "resolved",
               user: "agent",
             },
           ],
@@ -113,6 +114,55 @@ describe("Machine Inventory", () => {
           inventory.machines.map((machine) => machine.alias),
           ["dev", '"quoted#alias"'],
         );
+      }),
+    );
+  });
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(() => Effect.succeed("Host workstation broken-host")),
+      OpenSsh.layer({
+        resolve: (alias) =>
+          alias === "workstation"
+            ? Effect.succeed(["user agent", "hostname workstation.local", "port 2222"].join("\n"))
+            : Effect.fail(
+                new OpenSsh.ConnectionFailed({
+                  message: "ssh: Could not resolve hostname broken-host",
+                }),
+              ),
+      }),
+    ),
+  )((test) => {
+    test.effect("keeps resolved aliases when another SSH alias fails resolution", () =>
+      Effect.gen(function* () {
+        const inventory = yield* MachineInventory.load({
+          sshConfigPath: "/home/example/.ssh/config",
+        });
+
+        assert.deepStrictEqual(inventory, {
+          machines: [
+            {
+              alias: "workstation",
+              hostName: "workstation.local",
+              port: 2222,
+              source: {
+                kind: "ssh-config",
+                path: "/home/example/.ssh/config",
+              },
+              state: "resolved",
+              user: "agent",
+            },
+            {
+              alias: "broken-host",
+              error: "ssh: Could not resolve hostname broken-host",
+              source: {
+                kind: "ssh-config",
+                path: "/home/example/.ssh/config",
+              },
+              state: "resolution-failed",
+            },
+          ],
+        });
       }),
     );
   });
