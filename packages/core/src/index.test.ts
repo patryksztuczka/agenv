@@ -1,5 +1,8 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect, Layer } from "effect";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { test as vitestTest } from "vitest";
 import {
   AgentFileSystem,
@@ -316,6 +319,75 @@ describe("OpenSSH", () => {
   });
 });
 
+describe("OpenSSH live process harness", () => {
+  vitestTest("reads present and missing remote files through OpenSSH argv joining", async () => {
+    await withFakeOpenSsh(async ({ remoteHome }) => {
+      await mkdir(join(remoteHome, ".codex"), {
+        recursive: true,
+      });
+      await writeFile(join(remoteHome, ".codex", "config.toml"), 'model = "gpt-5"\n');
+
+      const present = await Effect.runPromise(
+        CodexConfigFile.readConfig({
+          target: {
+            alias: "workstation",
+            type: "ssh",
+          },
+        }).pipe(Effect.provide(OpenSsh.liveLayer)),
+      );
+      const missing = await Effect.runPromise(
+        CodexConfigFile.readConfig({
+          remoteConfigPath: "~/.codex/missing.toml",
+          target: {
+            alias: "workstation",
+            type: "ssh",
+          },
+        }).pipe(Effect.provide(OpenSsh.liveLayer)),
+      );
+
+      assert.deepStrictEqual(present, {
+        configFamily: "codex",
+        contents: 'model = "gpt-5"\n',
+        managedFile: "config.toml",
+        path: "workstation:~/.codex/config.toml",
+        state: "present",
+      });
+      assert.strictEqual(missing.state, "missing");
+      assert.strictEqual(missing.path, "workstation:~/.codex/missing.toml");
+    });
+  });
+
+  vitestTest("push apply writes over SSH and verifies through live OpenSSH", async () => {
+    await withFakeOpenSsh(async ({ remoteHome }) => {
+      const localConfigPath = join(remoteHome, "..", "local-home", ".codex", "config.toml");
+      const remoteConfigPath = join(remoteHome, ".codex", "config.toml");
+      await mkdir(dirname(localConfigPath), {
+        recursive: true,
+      });
+      await mkdir(dirname(remoteConfigPath), {
+        recursive: true,
+      });
+      await writeFile(localConfigPath, 'model = "gpt-5"\n');
+      await writeFile(remoteConfigPath, 'model = "gpt-4.1"\n');
+
+      const result = await Effect.runPromise(
+        CodexConfigFile.syncConfig({
+          direction: "push",
+          host: "workstation",
+          localConfigPath,
+          mode: "apply",
+        }).pipe(Effect.provide(Layer.mergeAll(realFileSystemLayer, OpenSsh.liveLayer))),
+      );
+
+      assert.strictEqual(result.applied, true);
+      assert.strictEqual(result.changed, true);
+      assert.strictEqual(result.verified, true);
+      assert.strictEqual(result.destination.state, "present");
+      assert.strictEqual(await readFile(remoteConfigPath, "utf8"), 'model = "gpt-5"\n');
+    });
+  });
+});
+
 describe("Managed File Snapshots", () => {
   const originalHome = process.env.HOME;
   const restoreHome = () => {
@@ -542,3 +614,91 @@ describe("Codex Config Diff Preview", () => {
     }),
   );
 });
+
+interface FakeOpenSshHarness {
+  readonly remoteHome: string;
+}
+
+const withFakeOpenSsh = async (run: (harness: FakeOpenSshHarness) => Promise<void>) => {
+  const tempDirectory = await mkdtemp(join(tmpdir(), "agenv-openssh-"));
+  const binDirectory = join(tempDirectory, "bin");
+  const remoteHome = join(tempDirectory, "remote-home");
+  const fakeSshPath = join(binDirectory, "ssh");
+  const originalPath = process.env.PATH;
+
+  await mkdir(binDirectory, {
+    recursive: true,
+  });
+  await mkdir(remoteHome, {
+    recursive: true,
+  });
+  await writeFile(fakeSshPath, fakeSshScript(remoteHome));
+  await chmod(fakeSshPath, 0o700);
+
+  process.env.PATH = originalPath === undefined ? binDirectory : `${binDirectory}:${originalPath}`;
+
+  try {
+    await run({
+      remoteHome,
+    });
+  } finally {
+    if (originalPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
+
+    await rm(tempDirectory, {
+      force: true,
+      recursive: true,
+    });
+  }
+};
+
+const fakeSshScript = (remoteHome: string) => `#!/bin/sh
+set -eu
+
+if [ "\${1:-}" = "-G" ]; then
+  printf '%s\\n' 'user agent' 'hostname workstation.local' 'port 22'
+  exit 0
+fi
+
+if [ "$#" -lt 2 ]; then
+  echo "fake ssh expected a host alias and remote command" >&2
+  exit 255
+fi
+
+host_alias=$1
+shift
+
+if [ "$host_alias" != "workstation" ]; then
+  echo "unknown fake ssh host: $host_alias" >&2
+  exit 255
+fi
+
+export HOME=${quoteShellForTest(remoteHome)}
+remote_command="$*"
+exec sh -c "$remote_command"
+`;
+
+const quoteShellForTest = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
+const realFileSystemLayer = AgentFileSystem.layer(
+  (path) =>
+    Effect.tryPromise({
+      catch: AgentFileSystem.classifyReadFailure,
+      try: () => readFile(path, "utf8"),
+    }),
+  (path, contents) =>
+    Effect.tryPromise({
+      catch: AgentFileSystem.classifyReadFailure,
+      try: async () => {
+        await mkdir(dirname(path), {
+          recursive: true,
+        });
+        await writeFile(path, contents, {
+          mode: 0o600,
+        });
+      },
+    }),
+);
