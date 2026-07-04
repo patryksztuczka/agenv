@@ -682,4 +682,176 @@ describe("CLI Codex Config Push/Pull", () => {
       }),
     );
   });
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer((path) => {
+        assert.strictEqual(path, "/tmp/agenv-age-12-remote/.codex/config.toml");
+
+        return Effect.succeed('model = "gpt-5"\n');
+      }),
+      OpenSsh.layer({
+        readFile: (alias, path) => {
+          assert.strictEqual(alias, "workstation");
+          assert.strictEqual(path, "~/.codex/config.toml");
+
+          return Effect.succeed('model = "gpt-4.1"\n');
+        },
+        resolve: () => Effect.succeed(""),
+        writeFile: (alias, path) => {
+          assert.strictEqual(alias, "workstation");
+          assert.strictEqual(path, "~/.codex/config.toml");
+
+          return Effect.fail(
+            new OpenSsh.RemoteFileUnreadable({
+              message: "remote permission denied",
+            }),
+          );
+        },
+      }),
+      MachineInventory.emptyLayer,
+    ),
+  )((test) => {
+    test.effect("returns structured JSON when push apply cannot write the remote destination", () =>
+      Effect.gen(function* () {
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/tmp/agenv-age-12-remote";
+        const result = yield* runCli([
+          "push",
+          "codex",
+          "config",
+          "--host",
+          "workstation",
+          "--apply",
+          "--json",
+        ]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        const parsed = JSON.parse(result.stdout);
+
+        assert.strictEqual(result.exitCode, 1);
+        assert.strictEqual(result.stderr, "");
+        assert.strictEqual(parsed.applied, false);
+        assert.strictEqual(parsed.changed, true);
+        assert.strictEqual(parsed.verified, false);
+        assert.strictEqual(parsed.error, "Destination write failed: remote permission denied");
+        assert.strictEqual(parsed.source.path, "/tmp/agenv-age-12-remote/.codex/config.toml");
+        assert.strictEqual(parsed.destination.path, "workstation:~/.codex/config.toml");
+      }),
+    );
+
+    test.effect("renders concise text when push apply cannot write the remote destination", () =>
+      Effect.gen(function* () {
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/tmp/agenv-age-12-remote";
+        const result = yield* runCli([
+          "push",
+          "codex",
+          "config",
+          "--host",
+          "workstation",
+          "--apply",
+        ]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        assert.strictEqual(result.exitCode, 1);
+        assert.strictEqual(result.stderr, "");
+        assert.match(result.stdout, /Destination write failed: remote permission denied/);
+        assert.isFalse(/FiberFailure/.test(result.stdout));
+        assert.isFalse(/\n\s+at\s+/.test(result.stdout));
+      }),
+    );
+  });
+
+  let localWriteFailureContents: string | undefined;
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(
+        (path) => {
+          assert.strictEqual(path, "/tmp/agenv-age-12-local/.codex/config.toml");
+
+          return Effect.succeed('model = "gpt-5"\n');
+        },
+        (path, contents) => {
+          assert.strictEqual(path, "/tmp/agenv-age-12-local/.codex/config.toml");
+          localWriteFailureContents = contents;
+
+          return Effect.fail(
+            new AgentFileSystem.FileUnreadable({
+              message: "local permission denied",
+            }),
+          );
+        },
+      ),
+      OpenSsh.layer({
+        readFile: (alias, path) => {
+          assert.strictEqual(alias, "workstation");
+          assert.strictEqual(path, "~/.codex/config.toml");
+
+          return Effect.succeed('model = "gpt-4.1"\n');
+        },
+        resolve: () => Effect.succeed(""),
+      }),
+      MachineInventory.emptyLayer,
+    ),
+  )((test) => {
+    test.effect("returns structured JSON when pull apply cannot write the local destination", () =>
+      Effect.gen(function* () {
+        localWriteFailureContents = undefined;
+
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/tmp/agenv-age-12-local";
+        const result = yield* runCli([
+          "pull",
+          "codex",
+          "config",
+          "--host",
+          "workstation",
+          "--apply",
+          "--json",
+        ]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        const parsed = JSON.parse(result.stdout);
+
+        assert.strictEqual(result.exitCode, 1);
+        assert.strictEqual(result.stderr, "");
+        assert.strictEqual(localWriteFailureContents, 'model = "gpt-4.1"\n');
+        assert.strictEqual(parsed.applied, false);
+        assert.strictEqual(parsed.changed, true);
+        assert.strictEqual(parsed.verified, false);
+        assert.strictEqual(parsed.error, "Destination write failed: local permission denied");
+        assert.strictEqual(parsed.source.path, "workstation:~/.codex/config.toml");
+        assert.strictEqual(parsed.destination.path, "/tmp/agenv-age-12-local/.codex/config.toml");
+      }),
+    );
+  });
 });

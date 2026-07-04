@@ -224,7 +224,28 @@ export const syncConfig = Effect.fn("CodexConfigFile.syncConfig")(function* (
     } satisfies SyncConfigResult;
   }
 
-  yield* writeDestination(options.direction, options.host, localPath, remotePath, source.contents);
+  const writeError = yield* writeDestination(
+    options.direction,
+    options.host,
+    localPath,
+    remotePath,
+    source.contents,
+  ).pipe(
+    Effect.match({
+      onFailure: (failure) => failure.message,
+      onSuccess: () => undefined,
+    }),
+  );
+
+  if (writeError !== undefined) {
+    return syncFailure(
+      options,
+      source,
+      destination,
+      diff,
+      `Destination write failed: ${writeError}`,
+    );
+  }
 
   const verifiedDestination = yield* readConfig({
     localConfigPath: localPath,
