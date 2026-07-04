@@ -188,12 +188,90 @@ describe("CLI Host Visibility", () => {
 
         const body = JSON.parse(result.stdout);
         assert.strictEqual(result.exitCode, 0);
+        assert.strictEqual(body.changed, true);
         assert.strictEqual(body.reason, null);
         assert.strictEqual(body.left.path, "/home/example/.codex/config.toml");
         assert.strictEqual(body.left.target.type, "local");
         assert.strictEqual(body.right.path, "workstation:~/.codex/config.toml");
         assert.strictEqual(body.right.target.alias, "workstation");
         assert.match(body.diff, /--- \/home\/example\/\.codex\/config\.toml/);
+      }),
+    );
+  });
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer((path) => {
+        assert.strictEqual(path, "/home/example/.codex/config.toml");
+
+        return Effect.succeed('model = "same"\n');
+      }),
+      OpenSsh.layer({
+        readFile: (alias, path) => {
+          assert.strictEqual(alias, "workstation");
+          assert.strictEqual(path, "~/.codex/config.toml");
+
+          return Effect.succeed('model = "same"\n');
+        },
+        resolve: () => Effect.succeed(""),
+      }),
+      MachineInventory.emptyLayer,
+    ),
+  )((test) => {
+    test.effect("renders no changes for identical Codex config diffs", () =>
+      Effect.gen(function* () {
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const result = yield* runCli(["diff", "codex", "config", "--host", "workstation"]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.match(result.stdout, /Codex Config Diff/);
+        assert.match(result.stdout, /No changes\./);
+        assert.isFalse(/^--- /m.test(result.stdout));
+        assert.isFalse(/^\+\+\+ /m.test(result.stdout));
+      }),
+    );
+
+    test.effect("renders structured no-change Codex config diff output for agents", () =>
+      Effect.gen(function* () {
+        const originalHome = process.env.HOME;
+        process.env.HOME = "/home/example";
+        const result = yield* runCli([
+          "diff",
+          "codex",
+          "config",
+          "--host",
+          "workstation",
+          "--json",
+        ]).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) {
+                delete process.env.HOME;
+              } else {
+                process.env.HOME = originalHome;
+              }
+            }),
+          ),
+        );
+
+        const body = JSON.parse(result.stdout);
+        assert.strictEqual(result.exitCode, 0);
+        assert.strictEqual(body.changed, false);
+        assert.strictEqual(body.diff, null);
+        assert.strictEqual(body.reason, "no changes");
+        assert.strictEqual(body.left.path, "/home/example/.codex/config.toml");
+        assert.strictEqual(body.right.path, "workstation:~/.codex/config.toml");
       }),
     );
   });

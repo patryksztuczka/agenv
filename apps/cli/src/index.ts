@@ -284,6 +284,7 @@ interface SshDiffSnapshotMetadata extends CodexConfigDiffSnapshotMetadata {
 }
 
 interface DiffPreviewOutput {
+  readonly changed: boolean;
   readonly diff: string | null;
   readonly left: LocalDiffSnapshotMetadata;
   readonly reason: string | null;
@@ -291,6 +292,7 @@ interface DiffPreviewOutput {
 }
 
 const withDiffTargets = (preview: CodexConfigDiffPreview, host: string): DiffPreviewOutput => ({
+  changed: preview.changed,
   diff: preview.diff,
   left: {
     ...preview.left,
@@ -318,6 +320,10 @@ const renderDiffPreview = (preview: DiffPreviewOutput) => {
 
   if (preview.diff !== null) {
     return [...lines, "", preview.diff].join("\n");
+  }
+
+  if (!preview.changed) {
+    return [...lines, "", "No changes."].join("\n");
   }
 
   return [
