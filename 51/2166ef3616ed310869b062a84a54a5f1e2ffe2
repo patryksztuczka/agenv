@@ -1,0 +1,30 @@
+apps/cli/src/index.test.ts
+  s_da71833e53ec72::t_735aa014d3dc14 15,25-32,60,63-71,88-89,91
+apps/cli/src/index.ts
+  s_da71833e53ec72::t_025684ced8e6c8 212-222,224-225
+  s_da71833e53ec72::t_f975e12e67270a 223
+packages/core/src/MachineInventory.ts
+  s_da71833e53ec72::t_998340bda1527b 142,148
+  s_da71833e53ec72::t_2989e9d26fefb9 10,13-17,22,30-39,59,115-116,123,126-141,143-147,149-150,152
+packages/core/src/index.test.ts
+  s_da71833e53ec72::t_efbcfe62c7a276 52,121-166
+  s_da71833e53ec72::t_06be583a004260 167-169
+apps/api/src/index.test.ts
+  s_da71833e53ec72::t_d8fe7bc3c6ad3c 31,59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "512166ef3616ed310869b062a84a54a5f1e2ffe2",
+  "prompts": {},
+  "sessions": {
+    "s_da71833e53ec72": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f2e81-4125-7083-8c54-e88df656cf3b",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Patryk Sztuczka <patryk.sztuczka00@gmail.com>"
+    }
+  }
+}
