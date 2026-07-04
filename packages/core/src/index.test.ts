@@ -247,8 +247,8 @@ describe("OpenSSH", () => {
     assert.strictEqual(
       OpenSsh.unsafeOpenSshInternals.remoteReadCommand("~/.codex/config.toml"),
       [
-        "if [ ! -e ~/'.codex/config.toml' ]; then exit 2; fi",
-        "if [ ! -r ~/'.codex/config.toml' ]; then exit 3; fi",
+        "if [ ! -e ~/'.codex/config.toml' ]; then printf '%s\\n' '__AGENV_REMOTE_MISSING__' >&2; exit 86; fi",
+        "if [ ! -r ~/'.codex/config.toml' ]; then printf '%s\\n' '__AGENV_REMOTE_UNREADABLE__' >&2; exit 87; fi",
         "cat -- ~/'.codex/config.toml'",
       ].join("; "),
     );
@@ -258,11 +258,37 @@ describe("OpenSSH", () => {
     assert.strictEqual(
       OpenSsh.unsafeOpenSshInternals.remoteReadCommand("/tmp/agent's config.toml"),
       [
-        "if [ ! -e '/tmp/agent'\\''s config.toml' ]; then exit 2; fi",
-        "if [ ! -r '/tmp/agent'\\''s config.toml' ]; then exit 3; fi",
+        "if [ ! -e '/tmp/agent'\\''s config.toml' ]; then printf '%s\\n' '__AGENV_REMOTE_MISSING__' >&2; exit 86; fi",
+        "if [ ! -r '/tmp/agent'\\''s config.toml' ]; then printf '%s\\n' '__AGENV_REMOTE_UNREADABLE__' >&2; exit 87; fi",
         "cat -- '/tmp/agent'\\''s config.toml'",
       ].join("; "),
     );
+  });
+
+  vitestTest("does not classify arbitrary SSH exit code 2 as a missing remote file", () => {
+    const failure = OpenSsh.unsafeOpenSshInternals.classifyRemoteReadFailure({
+      code: 2,
+      stderr: "sh: 1: Syntax error: word unexpected\n",
+    });
+
+    assert.instanceOf(failure, OpenSsh.ConnectionFailed);
+    assert.strictEqual(failure.message, "sh: 1: Syntax error: word unexpected");
+  });
+
+  vitestTest("classifies agenv remote read markers as missing or unreadable", () => {
+    const missing = OpenSsh.unsafeOpenSshInternals.classifyRemoteReadFailure({
+      code: 86,
+      stderr: "__AGENV_REMOTE_MISSING__\n",
+    });
+    const unreadable = OpenSsh.unsafeOpenSshInternals.classifyRemoteReadFailure({
+      code: 87,
+      stderr: "__AGENV_REMOTE_UNREADABLE__\n",
+    });
+
+    assert.instanceOf(missing, OpenSsh.RemoteFileNotFound);
+    assert.strictEqual(missing.message, "Remote file is missing");
+    assert.instanceOf(unreadable, OpenSsh.RemoteFileUnreadable);
+    assert.strictEqual(unreadable.message, "Remote file is unreadable");
   });
 });
 

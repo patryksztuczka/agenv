@@ -3,6 +3,10 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFilePromise = promisify(execFile);
+const REMOTE_FILE_MISSING_MARKER = "__AGENV_REMOTE_MISSING__";
+const REMOTE_FILE_UNREADABLE_MARKER = "__AGENV_REMOTE_UNREADABLE__";
+const REMOTE_FILE_MISSING_EXIT_CODE = 86;
+const REMOTE_FILE_UNREADABLE_EXIT_CODE = 87;
 
 /**
  * Expected failure when OpenSSH cannot connect to or resolve an SSH-Known
@@ -141,6 +145,7 @@ export const liveLayer = Layer.succeed(OpenSsh)({
 });
 
 export const unsafeOpenSshInternals = {
+  classifyRemoteReadFailure,
   remoteReadCommand,
   remoteWriteCommand,
   validateAlias,
@@ -158,10 +163,20 @@ function remoteReadCommand(path: string) {
   const quotedPath = shellPath(path);
 
   return [
-    `if [ ! -e ${quotedPath} ]; then exit 2; fi`,
-    `if [ ! -r ${quotedPath} ]; then exit 3; fi`,
+    `if [ ! -e ${quotedPath} ]; then ${remoteFailureCommand(
+      REMOTE_FILE_MISSING_MARKER,
+      REMOTE_FILE_MISSING_EXIT_CODE,
+    )}; fi`,
+    `if [ ! -r ${quotedPath} ]; then ${remoteFailureCommand(
+      REMOTE_FILE_UNREADABLE_MARKER,
+      REMOTE_FILE_UNREADABLE_EXIT_CODE,
+    )}; fi`,
     `cat -- ${quotedPath}`,
   ].join("; ");
+}
+
+function remoteFailureCommand(marker: string, exitCode: number) {
+  return `printf '%s\\n' ${quoteShell(marker)} >&2; exit ${exitCode}`;
 }
 
 function remoteWriteCommand(path: string, base64Contents: string) {
@@ -188,19 +203,48 @@ const shellPath = (path: string) => {
 
 const quoteShell = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
-const classifyRemoteReadFailure = (error: unknown): RemoteFileReadFailure => {
+function classifyRemoteReadFailure(error: unknown): RemoteFileReadFailure {
   const code = exitCode(error);
+  const stderr = errorStderr(error);
   const message = errorMessage(error);
 
-  if (code === 2) {
-    return new RemoteFileNotFound({ message });
+  if (
+    code === REMOTE_FILE_MISSING_EXIT_CODE &&
+    hasRemoteFailureMarker(stderr, REMOTE_FILE_MISSING_MARKER)
+  ) {
+    return new RemoteFileNotFound({
+      message: remoteFailureMessage(stderr, REMOTE_FILE_MISSING_MARKER, "Remote file is missing"),
+    });
   }
 
-  if (code === 3) {
-    return new RemoteFileUnreadable({ message });
+  if (
+    code === REMOTE_FILE_UNREADABLE_EXIT_CODE &&
+    hasRemoteFailureMarker(stderr, REMOTE_FILE_UNREADABLE_MARKER)
+  ) {
+    return new RemoteFileUnreadable({
+      message: remoteFailureMessage(
+        stderr,
+        REMOTE_FILE_UNREADABLE_MARKER,
+        "Remote file is unreadable",
+      ),
+    });
   }
 
   return new ConnectionFailed({ message });
+}
+
+const hasRemoteFailureMarker = (stderr: string | undefined, marker: string) =>
+  stderr?.split(/\r?\n/).some((line) => line.trim() === marker) ?? false;
+
+const remoteFailureMessage = (stderr: string | undefined, marker: string, fallback: string) => {
+  const details =
+    stderr
+      ?.split(/\r?\n/)
+      .filter((line) => line.trim().length > 0 && line.trim() !== marker)
+      .join("\n")
+      .trim() ?? "";
+
+  return details.length > 0 ? details : fallback;
 };
 
 const exitCode = (error: unknown) => {
@@ -213,13 +257,21 @@ const exitCode = (error: unknown) => {
   return undefined;
 };
 
-const errorMessage = (error: unknown) => {
+const errorStderr = (error: unknown) => {
   if (typeof error === "object" && error !== null && "stderr" in error) {
     const stderr = error.stderr;
 
-    if (typeof stderr === "string" && stderr.length > 0) {
-      return stderr.trim();
-    }
+    return typeof stderr === "string" ? stderr : undefined;
+  }
+
+  return undefined;
+};
+
+const errorMessage = (error: unknown) => {
+  const stderr = errorStderr(error);
+
+  if (stderr !== undefined && stderr.length > 0) {
+    return stderr.trim();
   }
 
   return error instanceof Error ? error.message : "OpenSSH command failed";
