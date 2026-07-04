@@ -12,6 +12,9 @@ importers:
         specifier: 4.0.0-beta.93
         version: 4.0.0-beta.93
     devDependencies:
+      '@effect/language-service':
+        specifier: 0.86.4
+        version: 0.86.4
       '@effect/vitest':
         specifier: 4.0.0-beta.93
         version: 4.0.0-beta.93(effect@4.0.0-beta.93)(vitest@3.2.6(@types/node@24.13.2)(tsx@4.23.0)(yaml@2.9.0))
@@ -111,6 +114,10 @@ importers:
         version: 6.0.3
 
 packages:
+
+  '@effect/language-service@0.86.4':
+    resolution: {integrity: sha512-XzAPsbwCdm0gRh0E8wJu3wXECb00QraE3LnbObA4RgHn8u2TEbwAjmBadRnwSgOIElfzZjbsRqNR706/V54hDg==}
+    hasBin: true
 
   '@effect/vitest@4.0.0-beta.93':
     resolution: {integrity: sha512-gMAnZ9PiMeJMDED9s0jWgCOhc2JccrTCxowhur/KriImsHnHIRj4VG/vK0xLw0Axe4AkTWzXNdRsFrYOjBTl3A==}
@@ -1179,6 +1186,8 @@ packages:
     hasBin: true
 
 snapshots:
+
+  '@effect/language-service@0.86.4': {}
 
   '@effect/vitest@4.0.0-beta.93(effect@4.0.0-beta.93)(vitest@3.2.6(@types/node@24.13.2)(tsx@4.23.0)(yaml@2.9.0))':
     dependencies:
