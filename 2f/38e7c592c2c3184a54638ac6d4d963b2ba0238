@@ -1,0 +1,41 @@
+docs/diagnostics.md
+  s_8305b237a04632::t_bd393d000af888 1-13
+packages/core/src/PackageManagerDiagnostics.ts
+  s_8305b237a04632::t_3f35282a38ea65 164-167
+  s_8305b237a04632::t_c07cbeb17a0db5 1-91,93,113-136,138-163,168-193,197-221,223-231
+  s_8305b237a04632::t_ed2c820ca2a16e 92,94-100,102-112,222
+  s_8305b237a04632::t_eb190d25e0f0ed 101
+  s_8305b237a04632::t_b26685979dbaba 137,194-196
+CONTEXT.md
+  s_8305b237a04632::t_dd01763b856a73 67-71
+apps/cli/src/index.ts
+  s_8305b237a04632::t_c4796f427f3497 9,144-161,200-202,294-320,415
+packages/core/src/index.ts
+  s_8305b237a04632::t_172a7dc09bed12 11
+packages/core/src/index.test.ts
+  s_8305b237a04632::t_3f35282a38ea65 275,303,307
+  s_8305b237a04632::t_8d59dac0d25b0f 285-289,311-312
+  s_8305b237a04632::t_6951fb1b76d174 10,270-274,276-284,290-302,304-306,308-310,313-316
+  s_8305b237a04632::t_ec232aec301b33 317-318
+apps/cli/src/index.test.ts
+  s_8305b237a04632::t_8c05f99056ec28 580-582,617-619
+  s_8305b237a04632::t_d744edaf70c2c2 85
+  s_8305b237a04632::t_492e9f8fb3f363 1,543-579,583-616,620-621
+  s_8305b237a04632::t_5ca59ae6ddac0a 622-624
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2f38e7c592c2c3184a54638ac6d4d963b2ba0238",
+  "prompts": {},
+  "sessions": {
+    "s_8305b237a04632": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f2e81-92d3-78a2-a531-83851402fc02",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Patryk Sztuczka <patryk.sztuczka00@gmail.com>"
+    }
+  }
+}
