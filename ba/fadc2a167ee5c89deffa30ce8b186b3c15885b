@@ -1,0 +1,35 @@
+packages/core/src/CodexConfigDiff.ts
+  s_970e020f4b78b5::t_1d75690cccf09d 18,49,59,67-76,78
+packages/core/src/index.test.ts
+  s_970e020f4b78b5::t_0e16caa2b1ef8e 437,445-469,489
+apps/cli/src/index.ts
+  s_970e020f4b78b5::t_de1411df99cf5c 287,295,325-326
+  s_970e020f4b78b5::t_ab6ade9a05b7e3 327-328
+apps/cli/src/index.test.ts
+  s_970e020f4b78b5::t_9ae00bf16407ad 191,202-276
+  s_2cb6c9ac4afe25::t_8e5693dc4667bb 277-278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "bafadc2a167ee5c89deffa30ce8b186b3c15885b",
+  "prompts": {},
+  "sessions": {
+    "s_2cb6c9ac4afe25": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f2e81-8f84-76b0-839c-37bfcc2df201",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Patryk Sztuczka <patryk.sztuczka00@gmail.com>"
+    },
+    "s_970e020f4b78b5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f2e81-8e3d-7963-b232-cf67843b9dd4",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Patryk Sztuczka <patryk.sztuczka00@gmail.com>"
+    }
+  }
+}
