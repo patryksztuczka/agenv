@@ -7,6 +7,7 @@ import {
   CodexConfigFile,
   MachineInventory,
   OpenSsh,
+  PackageManagerDiagnostics,
 } from "./index.js";
 
 describe("Machine Inventory", () => {
@@ -263,6 +264,55 @@ describe("OpenSSH", () => {
         "cat -- '/tmp/agent'\\''s config.toml'",
       ].join("; "),
     );
+  });
+});
+
+describe("Package Manager Diagnostics", () => {
+  vitestTest("redacts token-like package manager config values", () => {
+    const redacted = PackageManagerDiagnostics.redactPackageManagerConfig(
+      [
+        "//npm.pkg.github.com/:_authToken=ghp_FAKEPACKAGE123456789",
+        'token = "npm_FAKEPACKAGE123456789"',
+        "password = 'fake-password-value'",
+        "secret = fake-secret-value",
+        "credential = fake-credential-value",
+        "always-auth = true",
+        "@example:registry=https://npm.pkg.github.com/",
+        "init-author-name = Example User",
+      ].join("\n"),
+    );
+
+    assert.notMatch(redacted, /ghp_FAKEPACKAGE123456789/);
+    assert.notMatch(redacted, /npm_FAKEPACKAGE123456789/);
+    assert.notMatch(redacted, /fake-password-value/);
+    assert.notMatch(redacted, /fake-secret-value/);
+    assert.notMatch(redacted, /fake-credential-value/);
+    assert.match(redacted, /\/\/npm\.pkg\.github\.com\/:_authToken=<redacted>/);
+    assert.match(redacted, /token = "<redacted>"/);
+    assert.match(redacted, /password = '<redacted>'/);
+    assert.match(redacted, /secret = <redacted>/);
+    assert.match(redacted, /credential = <redacted>/);
+    assert.match(redacted, /always-auth = <redacted>/);
+    assert.match(redacted, /@example:registry=https:\/\/npm\.pkg\.github\.com\//);
+    assert.match(redacted, /init-author-name = Example User/);
+  });
+
+  vitestTest("redacts token-like values in JSON-shaped diagnostics", () => {
+    const redacted = PackageManagerDiagnostics.redactPackageManagerConfig(
+      [
+        "{",
+        '  "auth": "fake-json-auth-value",',
+        '  "credentialHelper": "fake-json-credential-value",',
+        '  "registry": "https://npm.pkg.github.com/"',
+        "}",
+      ].join("\n"),
+    );
+
+    assert.notMatch(redacted, /fake-json-auth-value/);
+    assert.notMatch(redacted, /fake-json-credential-value/);
+    assert.match(redacted, /"auth": "<redacted>",/);
+    assert.match(redacted, /"credentialHelper": "<redacted>",/);
+    assert.match(redacted, /"registry": "https:\/\/npm\.pkg\.github\.com\/"/);
   });
 });
 

@@ -1,4 +1,4 @@
-import { AgentFileSystem, MachineInventory, OpenSsh } from "@agenv/core";
+import { AgentFileSystem, MachineInventory, OpenSsh, PackageManagerDiagnostics } from "@agenv/core";
 import { assert, describe, layer } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import { runCli } from "./index.js";
@@ -82,6 +82,7 @@ describe("CLI Host Visibility", () => {
         assert.match(result.stdout, /list/);
         assert.match(result.stdout, /inspect/);
         assert.match(result.stdout, /diff/);
+        assert.match(result.stdout, /diagnostics/);
         assert.strictEqual(result.stderr, "");
       }),
     );
@@ -534,6 +535,88 @@ describe("CLI Host Visibility", () => {
         assert.match(result.stdout, /State: connection-failed/);
         assert.match(result.stdout, /Path: workstation:~\/\.codex\/config\.toml/);
         assert.match(result.stdout, /ssh: connect to host workstation port 22: Connection refused/);
+      }),
+    );
+  });
+});
+
+describe("CLI Package Manager Diagnostics", () => {
+  layer(
+    PackageManagerDiagnostics.layer((packageManager) => {
+      if (packageManager === "npm") {
+        return Effect.succeed({
+          stderr: "",
+          stdout: [
+            "//registry.npmjs.org/:_authToken=npm_FAKEPACKAGE123456789",
+            "init-author-name = Example User",
+          ].join("\n"),
+        });
+      }
+
+      return Effect.succeed({
+        stderr: "warning token = ghp_FAKEPACKAGE123456789",
+        stdout: [
+          "@example:registry=https://npm.pkg.github.com/",
+          "//npm.pkg.github.com/:_authToken=ghp_FAKEPACKAGE123456789",
+          "password = fake-pnpm-password",
+        ].join("\n"),
+      });
+    }),
+  )((test) => {
+    test.effect("renders package manager config diagnostics without raw token values", () =>
+      Effect.gen(function* () {
+        const result = yield* runCli(["diagnostics", "package-manager-config"]);
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.match(result.stdout, /Package Manager Config Diagnostics/);
+        assert.match(result.stdout, /npm: ok/);
+        assert.match(result.stdout, /pnpm: ok/);
+        assert.match(result.stdout, /Source: package-manager-config/);
+        assert.match(result.stdout, /\/\/registry\.npmjs\.org\/:_authToken=<redacted>/);
+        assert.match(result.stdout, /\/\/npm\.pkg\.github\.com\/:_authToken=<redacted>/);
+        assert.match(result.stdout, /password = <redacted>/);
+        assert.match(result.stdout, /warning token = <redacted>/);
+        assert.match(result.stdout, /init-author-name = Example User/);
+        assert.notMatch(result.stdout, /npm_FAKEPACKAGE123456789/);
+        assert.notMatch(result.stdout, /ghp_FAKEPACKAGE123456789/);
+        assert.notMatch(result.stdout, /fake-pnpm-password/);
+        assert.strictEqual(result.stderr, "");
+      }),
+    );
+
+    test.effect("renders structured package manager config diagnostics with redacted values", () =>
+      Effect.gen(function* () {
+        const result = yield* runCli(["diagnostics", "package-manager-config", "--json"]);
+        const parsed = JSON.parse(result.stdout);
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.deepStrictEqual(
+          parsed.packageManagerConfigs.map(
+            (diagnostic: PackageManagerDiagnostics.ConfigDiagnostic) => ({
+              packageManager: diagnostic.packageManager,
+              redacted: diagnostic.redacted,
+              source: diagnostic.source,
+              status: diagnostic.status,
+            }),
+          ),
+          [
+            {
+              packageManager: "npm",
+              redacted: true,
+              source: "package-manager-config",
+              status: "ok",
+            },
+            {
+              packageManager: "pnpm",
+              redacted: true,
+              source: "package-manager-config",
+              status: "ok",
+            },
+          ],
+        );
+        assert.notMatch(result.stdout, /npm_FAKEPACKAGE123456789/);
+        assert.notMatch(result.stdout, /ghp_FAKEPACKAGE123456789/);
+        assert.notMatch(result.stdout, /fake-pnpm-password/);
       }),
     );
   });

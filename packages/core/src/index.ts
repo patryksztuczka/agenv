@@ -8,3 +8,4 @@ export * as CodexConfigFile from "./CodexConfigFile.js";
 export * as MachineInventory from "./MachineInventory.js";
 export * as ManagedFileSnapshot from "./ManagedFileSnapshot.js";
 export * as OpenSsh from "./OpenSsh.js";
+export * as PackageManagerDiagnostics from "./PackageManagerDiagnostics.js";

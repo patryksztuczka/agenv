@@ -6,6 +6,7 @@ import {
   MachineInventory,
   ManagedFileSnapshot,
   OpenSsh,
+  PackageManagerDiagnostics,
 } from "@agenv/core";
 import type { CodexConfigDiffPreview, CodexConfigDiffSnapshotMetadata } from "@agenv/core";
 import { Console, Effect, FileSystem, Layer, Option, Path, Ref, Stdio, Terminal } from "effect";
@@ -140,6 +141,24 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
   );
   const diffCodex = Command.make("codex").pipe(Command.withSubcommands([diffConfigCommand]));
   const diff = Command.make("diff").pipe(Command.withSubcommands([diffCodex]));
+  const packageManagerConfigCommand = Command.make(
+    "package-manager-config",
+    {
+      json: jsonFlag,
+    },
+    (options) =>
+      Effect.gen(function* () {
+        const diagnostics = yield* PackageManagerDiagnostics.inspectPackageManagerConfigs();
+        const stdout = options.json
+          ? renderJson(diagnostics)
+          : renderPackageManagerConfigDiagnostics(diagnostics);
+
+        yield* Ref.set(resultRef, success(stdout));
+      }),
+  );
+  const diagnostics = Command.make("diagnostics").pipe(
+    Command.withSubcommands([packageManagerConfigCommand]),
+  );
 
   const syncConfigCommand = (direction: CodexConfigFile.SyncDirection) =>
     Command.make(
@@ -178,7 +197,9 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
   );
   const pull = Command.make("pull").pipe(Command.withSubcommands([pullCodex]));
 
-  return Command.make("agenv").pipe(Command.withSubcommands([list, inspect, diff, push, pull]));
+  return Command.make("agenv").pipe(
+    Command.withSubcommands([list, inspect, diff, diagnostics, push, pull]),
+  );
 };
 
 const success = (stdout: string): CliResult => ({
@@ -268,6 +289,33 @@ const renderSyncResult = (result: CodexConfigFile.SyncConfigResult) => {
   }
 
   return `${lines.join("\n")}\n`;
+};
+
+const renderPackageManagerConfigDiagnostics = (
+  report: PackageManagerDiagnostics.DiagnosticsReport,
+) => {
+  const lines = ["Package Manager Config Diagnostics"];
+
+  for (const diagnostic of report.packageManagerConfigs) {
+    lines.push("", `${diagnostic.packageManager}: ${diagnostic.status}`);
+    lines.push(`Source: ${diagnostic.source}`);
+
+    if (diagnostic.output.trim().length > 0) {
+      lines.push("Output:", diagnostic.output.trimEnd());
+    } else {
+      lines.push("Output: <empty>");
+    }
+
+    if (diagnostic.stderr.trim().length > 0) {
+      lines.push("Stderr:", diagnostic.stderr.trimEnd());
+    }
+
+    if (diagnostic.error !== undefined) {
+      lines.push(`Error: ${diagnostic.error}`);
+    }
+  }
+
+  return lines.join("\n");
 };
 
 interface LocalDiffSnapshotMetadata extends CodexConfigDiffSnapshotMetadata {
@@ -364,6 +412,7 @@ const liveLayer = Layer.mergeAll(
       }),
   ),
   OpenSsh.liveLayer,
+  PackageManagerDiagnostics.liveLayer,
   MachineInventory.liveLayer({
     sshConfigPath: join(process.env.HOME ?? homedir(), ".ssh", "config"),
   }),
