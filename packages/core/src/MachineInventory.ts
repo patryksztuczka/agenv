@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from "effect";
 import * as AgentFileSystem from "./AgentFileSystem.js";
-import type { FileReadFailure } from "./CodexConfigFile.js";
+import * as CodexConfigFile from "./CodexConfigFile.js";
 import * as OpenSsh from "./OpenSsh.js";
 
 /**
@@ -39,7 +39,11 @@ export interface Source {
 export class MachineInventoryService extends Context.Service<
   MachineInventoryService,
   {
-    readonly list: Effect.Effect<Inventory>;
+    readonly list: Effect.Effect<
+      Inventory,
+      CodexConfigFile.Unreadable | OpenSsh.ConnectionFailed,
+      AgentFileSystem.AgentFileSystem | OpenSsh.OpenSsh
+    >;
   }
 >()("MachineInventoryService") {}
 
@@ -52,6 +56,23 @@ export class MachineInventoryService extends Context.Service<
 export const layer = (inventory: Inventory) =>
   Layer.succeed(MachineInventoryService)({
     list: Effect.succeed(inventory),
+  });
+
+/**
+ * Provides Machine Inventory by loading SSH config and resolving aliases each
+ * time the inventory is requested.
+ */
+export const liveLayer = (options: LoadOptions) =>
+  Layer.succeed(MachineInventoryService)({
+    list: load(options).pipe(
+      Effect.catchIf(
+        (failure) => failure instanceof CodexConfigFile.NotFound,
+        () =>
+          Effect.succeed({
+            machines: [],
+          }),
+      ),
+    ),
   });
 
 export const emptyLayer = layer({
@@ -109,7 +130,7 @@ export const load = Effect.fn("MachineInventory.load")(function* (options: LoadO
  */
 export const loadWith = (
   options: LoadOptions & {
-    readonly readFile: (path: string) => Effect.Effect<string, FileReadFailure>;
+    readonly readFile: (path: string) => Effect.Effect<string, CodexConfigFile.FileReadFailure>;
     readonly runOpenSsh: (args: readonly string[]) => Effect.Effect<string>;
   },
 ) =>
@@ -117,7 +138,9 @@ export const loadWith = (
     Effect.provide(
       Layer.mergeAll(
         AgentFileSystem.layer(options.readFile),
-        OpenSsh.layer((alias) => options.runOpenSsh(["-G", alias])),
+        OpenSsh.layer({
+          resolve: (alias) => options.runOpenSsh(["-G", alias]),
+        }),
       ),
     ),
   );

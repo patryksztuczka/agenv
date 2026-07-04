@@ -1,5 +1,5 @@
 import { serve } from "@hono/node-server";
-import { AgentFileSystem, CodexConfigFile, MachineInventory } from "@agenv/core";
+import { AgentFileSystem, CodexConfigFile, MachineInventory, OpenSsh } from "@agenv/core";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { Hono } from "hono";
 import { readFile } from "node:fs/promises";
@@ -14,7 +14,7 @@ export interface ApiOptions {
    * into a ManagedRuntime inside `createApp` and reused for each request.
    */
   readonly layer: Layer.Layer<
-    MachineInventory.MachineInventoryService | AgentFileSystem.AgentFileSystem
+    MachineInventory.MachineInventoryService | AgentFileSystem.AgentFileSystem | OpenSsh.OpenSsh
   >;
 }
 
@@ -46,20 +46,21 @@ export const createApp = (options: ApiOptions) => {
   );
 
   app.get("/codex/config", async (context) => {
-    const target = context.req.query("target");
+    const target = parseConfigTarget(context.req.query("target"), context.req.query("alias"));
 
-    if (target !== "local") {
+    if (target === undefined) {
       return context.json(
         {
-          error: "target must be local for this endpoint slice",
+          error: "target must be local or ssh with alias",
         },
         400,
       );
     }
 
     const snapshot = await runtime.runPromise(
-      CodexConfigFile.readLocalConfig({
-        configPath: join(process.env.HOME ?? "", ".codex", "config.toml"),
+      CodexConfigFile.readConfig({
+        localConfigPath: join(process.env.HOME ?? "", ".codex", "config.toml"),
+        target,
       }),
     );
 
@@ -83,15 +84,36 @@ export const getGreeting = (name: string) =>
 
 const app = createApp({
   layer: Layer.mergeAll(
-    MachineInventory.emptyLayer,
+    MachineInventory.liveLayer({
+      sshConfigPath: join(process.env.HOME ?? "", ".ssh", "config"),
+    }),
     AgentFileSystem.layer((path) =>
       Effect.tryPromise({
         catch: CodexConfigFile.classifyReadFailure,
         try: () => readFile(path, "utf8"),
       }),
     ),
+    OpenSsh.liveLayer,
   ),
 });
+
+const parseConfigTarget = (
+  target: string | undefined,
+  alias: string | undefined,
+): CodexConfigFile.ConfigTarget | undefined => {
+  if (target === "local") {
+    return { type: "local" };
+  }
+
+  if (target === "ssh" && alias !== undefined && alias.length > 0) {
+    return {
+      alias,
+      type: "ssh",
+    };
+  }
+
+  return undefined;
+};
 
 export { app };
 

@@ -15,10 +15,14 @@ describe("Machine Inventory", () => {
           ].join("\n"),
         ),
       ),
-      OpenSsh.layer((alias) => {
-        assert.strictEqual(alias, "workstation");
+      OpenSsh.layer({
+        resolve: (alias) => {
+          assert.strictEqual(alias, "workstation");
 
-        return Effect.succeed(["user agent", "hostname workstation.local", "port 2222"].join("\n"));
+          return Effect.succeed(
+            ["user agent", "hostname workstation.local", "port 2222"].join("\n"),
+          );
+        },
       }),
     ),
   )((test) => {
@@ -41,6 +45,123 @@ describe("Machine Inventory", () => {
               user: "agent",
             },
           ],
+        });
+      }),
+    );
+  });
+
+  let readCount = 0;
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(() =>
+        Effect.sync(() => {
+          readCount += 1;
+
+          return `Host workstation-${readCount}`;
+        }),
+      ),
+      OpenSsh.layer({
+        resolve: (alias) =>
+          Effect.succeed(["user agent", `hostname ${alias}.local`, "port 22"].join("\n")),
+      }),
+      MachineInventory.liveLayer({
+        sshConfigPath: "/home/example/.ssh/config",
+      }),
+    ),
+  )((test) => {
+    test.effect("loads Machine Inventory dynamically for each list request", () =>
+      Effect.gen(function* () {
+        const first = yield* MachineInventory.list();
+        const second = yield* MachineInventory.list();
+
+        assert.deepStrictEqual(
+          first.machines.map((machine) => machine.alias),
+          ["workstation-1"],
+        );
+        assert.deepStrictEqual(
+          second.machines.map((machine) => machine.alias),
+          ["workstation-2"],
+        );
+      }),
+    );
+  });
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(() =>
+        Effect.fail(
+          new CodexConfigFile.NotFound({
+            message: "unused",
+          }),
+        ),
+      ),
+      OpenSsh.layer({
+        readFile: () =>
+          Effect.fail(
+            new OpenSsh.RemoteFileNotFound({
+              message: "remote file is missing",
+            }),
+          ),
+        resolve: () => Effect.succeed(""),
+      }),
+    ),
+  )((test) => {
+    test.effect("reports a missing remote Codex Config File distinctly", () =>
+      Effect.gen(function* () {
+        const snapshot = yield* CodexConfigFile.readConfig({
+          target: {
+            alias: "workstation",
+            type: "ssh",
+          },
+        });
+
+        assert.deepStrictEqual(snapshot, {
+          configFamily: "codex",
+          error: "remote file is missing",
+          managedFile: "config.toml",
+          path: "workstation:~/.codex/config.toml",
+          state: "missing",
+        });
+      }),
+    );
+  });
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(() =>
+        Effect.fail(
+          new CodexConfigFile.NotFound({
+            message: "unused",
+          }),
+        ),
+      ),
+      OpenSsh.layer({
+        readFile: () =>
+          Effect.fail(
+            new OpenSsh.RemoteFileUnreadable({
+              message: "remote file is unreadable",
+            }),
+          ),
+        resolve: () => Effect.succeed(""),
+      }),
+    ),
+  )((test) => {
+    test.effect("reports an unreadable remote Codex Config File distinctly", () =>
+      Effect.gen(function* () {
+        const snapshot = yield* CodexConfigFile.readConfig({
+          target: {
+            alias: "workstation",
+            type: "ssh",
+          },
+        });
+
+        assert.deepStrictEqual(snapshot, {
+          configFamily: "codex",
+          error: "remote file is unreadable",
+          managedFile: "config.toml",
+          path: "workstation:~/.codex/config.toml",
+          state: "unreadable",
         });
       }),
     );
@@ -69,6 +190,86 @@ describe("Managed File Snapshots", () => {
           managedFile: "config.toml",
           path: "/home/example/.codex/config.toml",
           state: "missing",
+        });
+      }),
+    );
+  });
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(() =>
+        Effect.fail(
+          new CodexConfigFile.NotFound({
+            message: "unused",
+          }),
+        ),
+      ),
+      OpenSsh.layer({
+        readFile: (alias, path) => {
+          assert.strictEqual(alias, "workstation");
+          assert.strictEqual(path, "~/.codex/config.toml");
+
+          return Effect.succeed('model = "gpt-5"');
+        },
+        resolve: () => Effect.succeed(""),
+      }),
+    ),
+  )((test) => {
+    test.effect("reads a remote Codex Config File from an SSH-Known Machine", () =>
+      Effect.gen(function* () {
+        const snapshot = yield* CodexConfigFile.readConfig({
+          target: {
+            alias: "workstation",
+            type: "ssh",
+          },
+        });
+
+        assert.deepStrictEqual(snapshot, {
+          configFamily: "codex",
+          contents: 'model = "gpt-5"',
+          managedFile: "config.toml",
+          path: "workstation:~/.codex/config.toml",
+          state: "present",
+        });
+      }),
+    );
+  });
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(() =>
+        Effect.fail(
+          new CodexConfigFile.NotFound({
+            message: "unused",
+          }),
+        ),
+      ),
+      OpenSsh.layer({
+        readFile: () =>
+          Effect.fail(
+            new OpenSsh.ConnectionFailed({
+              message: "ssh: connect to host workstation port 22: Connection refused",
+            }),
+          ),
+        resolve: () => Effect.succeed(""),
+      }),
+    ),
+  )((test) => {
+    test.effect("reports SSH connection failure distinctly for remote Codex config reads", () =>
+      Effect.gen(function* () {
+        const snapshot = yield* CodexConfigFile.readConfig({
+          target: {
+            alias: "workstation",
+            type: "ssh",
+          },
+        });
+
+        assert.deepStrictEqual(snapshot, {
+          configFamily: "codex",
+          error: "ssh: connect to host workstation port 22: Connection refused",
+          managedFile: "config.toml",
+          path: "workstation:~/.codex/config.toml",
+          state: "connection-failed",
         });
       }),
     );

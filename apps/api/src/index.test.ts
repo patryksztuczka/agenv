@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { AgentFileSystem, CodexConfigFile, MachineInventory } from "@agenv/core";
+import { AgentFileSystem, CodexConfigFile, MachineInventory, OpenSsh } from "@agenv/core";
 import { Effect, Layer } from "effect";
 import { createApp, getGreeting } from "./index.js";
 
@@ -37,6 +37,7 @@ describe("api", () => {
             }),
           ),
         ),
+        inertOpenSshLayer,
       ),
     });
     const response = await app.request("/machines");
@@ -65,6 +66,7 @@ describe("api", () => {
           machines: [],
         }),
         AgentFileSystem.layer(() => Effect.succeed("")),
+        inertOpenSshLayer,
       ),
     });
     const response = await app.request("/codex/config?target=local");
@@ -78,4 +80,91 @@ describe("api", () => {
       state: "present",
     });
   });
+
+  it("returns a remote Codex Config File for an SSH-Known Machine", async () => {
+    const app = createApp({
+      layer: Layer.mergeAll(
+        MachineInventory.layer({
+          machines: [],
+        }),
+        AgentFileSystem.layer(() =>
+          Effect.fail(
+            new CodexConfigFile.NotFound({
+              message: "unused",
+            }),
+          ),
+        ),
+        OpenSsh.layer({
+          readFile: (alias, path) => {
+            assert.strictEqual(alias, "workstation");
+            assert.strictEqual(path, "~/.codex/config.toml");
+
+            return Effect.succeed('model = "gpt-5"');
+          },
+          resolve: () => Effect.succeed(""),
+        }),
+      ),
+    });
+    const response = await app.request("/codex/config?target=ssh&alias=workstation");
+
+    assert.strictEqual(response.status, 200);
+    assert.deepStrictEqual(await response.json(), {
+      configFamily: "codex",
+      contents: 'model = "gpt-5"',
+      managedFile: "config.toml",
+      path: "workstation:~/.codex/config.toml",
+      state: "present",
+    });
+  });
+
+  it("returns connection-failed when OpenSSH cannot read remote Codex config", async () => {
+    const app = createApp({
+      layer: Layer.mergeAll(
+        MachineInventory.layer({
+          machines: [],
+        }),
+        AgentFileSystem.layer(() =>
+          Effect.fail(
+            new CodexConfigFile.NotFound({
+              message: "unused",
+            }),
+          ),
+        ),
+        OpenSsh.layer({
+          readFile: () =>
+            Effect.fail(
+              new OpenSsh.ConnectionFailed({
+                message: "ssh: connect to host workstation port 22: Connection refused",
+              }),
+            ),
+          resolve: () => Effect.succeed(""),
+        }),
+      ),
+    });
+    const response = await app.request("/codex/config?target=ssh&alias=workstation");
+
+    assert.strictEqual(response.status, 200);
+    assert.deepStrictEqual(await response.json(), {
+      configFamily: "codex",
+      error: "ssh: connect to host workstation port 22: Connection refused",
+      managedFile: "config.toml",
+      path: "workstation:~/.codex/config.toml",
+      state: "connection-failed",
+    });
+  });
+});
+
+const inertOpenSshLayer = OpenSsh.layer({
+  readFile: () =>
+    Effect.fail(
+      new OpenSsh.ConnectionFailed({
+        message: "OpenSSH is not expected in this test",
+      }),
+    ),
+  resolve: () =>
+    Effect.fail(
+      new OpenSsh.ConnectionFailed({
+        message: "OpenSSH is not expected in this test",
+      }),
+    ),
 });

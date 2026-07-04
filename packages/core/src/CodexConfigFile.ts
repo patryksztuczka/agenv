@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 import * as AgentFileSystem from "./AgentFileSystem.js";
 import type { ManagedFileSnapshot } from "./ManagedFileSnapshot.js";
+import * as OpenSsh from "./OpenSsh.js";
 
 /**
  * Expected read failure when the Codex Config File does not exist.
@@ -20,6 +21,21 @@ export type FileReadFailure = NotFound | Unreadable;
 
 export interface LocalConfigOptions {
   readonly configPath: string;
+}
+
+export type ConfigTarget =
+  | {
+      readonly type: "local";
+    }
+  | {
+      readonly alias: string;
+      readonly type: "ssh";
+    };
+
+export interface ReadConfigOptions {
+  readonly localConfigPath?: string;
+  readonly remoteConfigPath?: string;
+  readonly target: ConfigTarget;
 }
 
 /**
@@ -48,6 +64,53 @@ export const readLocalConfig = Effect.fn("CodexConfigFile.readLocalConfig")(func
           contents: fileContents,
           managedFile: "config.toml",
           path: options.configPath,
+          state: "present",
+        }) satisfies ManagedFileSnapshot,
+    }),
+  );
+
+  return snapshot;
+});
+
+/**
+ * Reads the Codex Config File for an explicit target.
+ *
+ * Local targets use AgentFileSystem. SSH targets use OpenSsh and map
+ * SSH-level connection failures into the shared Managed File Snapshot state.
+ */
+export const readConfig = Effect.fn("CodexConfigFile.readConfig")(function* (
+  options: ReadConfigOptions,
+) {
+  if (options.target.type === "local") {
+    return yield* readLocalConfig({
+      configPath: options.localConfigPath ?? "~/.codex/config.toml",
+    });
+  }
+
+  const openSsh = yield* OpenSsh.OpenSsh;
+  const alias = options.target.alias;
+  const configPath = options.remoteConfigPath ?? "~/.codex/config.toml";
+  const snapshot = yield* openSsh.readFile(alias, configPath).pipe(
+    Effect.match({
+      onFailure: (failure) =>
+        ({
+          configFamily: "codex",
+          error: failure.message,
+          managedFile: "config.toml",
+          path: `${alias}:${configPath}`,
+          state:
+            failure instanceof OpenSsh.ConnectionFailed
+              ? "connection-failed"
+              : failure instanceof OpenSsh.RemoteFileNotFound
+                ? "missing"
+                : "unreadable",
+        }) satisfies ManagedFileSnapshot,
+      onSuccess: (fileContents) =>
+        ({
+          configFamily: "codex",
+          contents: fileContents,
+          managedFile: "config.toml",
+          path: `${alias}:${configPath}`,
           state: "present",
         }) satisfies ManagedFileSnapshot,
     }),
