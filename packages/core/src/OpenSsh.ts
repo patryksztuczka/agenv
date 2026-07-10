@@ -208,7 +208,14 @@ function remoteReadDirectoryCommand(path: string) {
       REMOTE_FILE_UNREADABLE_MARKER,
       REMOTE_FILE_UNREADABLE_EXIT_CODE,
     )}; fi`,
-    `find ${quotedPath} -mindepth 1 -maxdepth 1 -printf '%f\\t%y\\n'`,
+    [
+      `for entry in ${quotedPath}/* ${quotedPath}/.[!.]* ${quotedPath}/..?*; do`,
+      `[ -e "$entry" ] || continue`,
+      `name=${"${entry##*/}"}`,
+      `if [ -d "$entry" ]; then type=d; else type=f; fi`,
+      `printf '%s\\t%s\\n' "$name" "$type"`,
+      `done`,
+    ].join("; "),
   ].join("; ");
 }
 

@@ -1,7 +1,7 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test as vitestTest } from "vitest";
 import {
@@ -372,20 +372,34 @@ describe("Installed Skills", () => {
   layer(
     AgentFileSystem.layer(
       (path) =>
-        path.includes("missing-frontmatter")
-          ? Effect.succeed("No frontmatter")
-          : Effect.succeed("---\nname: [invalid]\n---\nBody"),
+        path.includes("optional-frontmatter")
+          ? Effect.succeed(
+              [
+                "---",
+                "name: optional",
+                "description: Optional fields are allowed",
+                "tools:",
+                "  - read",
+                "tags: [agent, skill]",
+                "---",
+                "Body",
+              ].join("\n"),
+            )
+          : path.includes("missing-frontmatter")
+            ? Effect.succeed("No frontmatter")
+            : Effect.succeed("---\nname: [invalid]\n---\nBody"),
       undefined,
       (path) =>
         path === "/repo/.claude/skills"
           ? Effect.succeed([
               { isDirectory: true, name: "missing-frontmatter" },
               { isDirectory: true, name: "invalid-frontmatter" },
+              { isDirectory: true, name: "optional-frontmatter" },
             ])
           : Effect.fail(new AgentFileSystem.FileUnreadable({ message: "permission denied" })),
     ),
   )((test) => {
-    test.effect("classifies missing and invalid skill frontmatter", () =>
+    test.effect("classifies skill frontmatter and tolerates unsupported fields", () =>
       Effect.gen(function* () {
         const inventory = yield* InstalledSkills.load({
           sourcePlans: [sourcePlans[0]],
@@ -393,10 +407,11 @@ describe("Installed Skills", () => {
         });
 
         assert.deepStrictEqual(
-          inventory.skills.map((skill) => [skill.name, skill.metadataState]),
+          inventory.skills.map((skill) => [skill.name, skill.metadataState, skill.description]),
           [
-            ["missing-frontmatter", "missing-frontmatter"],
-            ["invalid-frontmatter", "invalid-frontmatter"],
+            ["missing-frontmatter", "missing-frontmatter", undefined],
+            ["invalid-frontmatter", "invalid-frontmatter", undefined],
+            ["optional", "parsed", "Optional fields are allowed"],
           ],
         );
       }),
@@ -457,11 +472,12 @@ describe("Installed Skills", () => {
               skill.name,
               skill.source.path,
               skill.metadataState,
+              skill.error,
             ]),
             [
-              ["codex", "review", "/repo/.agents/skills", "parsed"],
-              ["opencode", "review", "/repo/.agents/skills", "parsed"],
-              ["codex", "root-only", "/etc/codex/skills", "unreadable"],
+              ["codex", "review", "/repo/.agents/skills", "parsed", undefined],
+              ["opencode", "review", "/repo/.agents/skills", "parsed", undefined],
+              ["codex", "root-only", "/etc/codex/skills", "unreadable", "permission denied"],
             ],
           );
         }),
@@ -588,6 +604,69 @@ describe("Installed Skills", () => {
       }),
     );
   });
+
+  layer(
+    AgentFileSystem.layer(
+      () => Effect.fail(new AgentFileSystem.FileNotFound({ message: "unused" })),
+      undefined,
+      () => Effect.fail(new AgentFileSystem.FileNotFound({ message: "missing" })),
+    ),
+  )((test) => {
+    const originalHome = process.env.HOME;
+    const restoreHome = () => {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    };
+
+    test.effect("uses requested local projectPath for project source plans", () =>
+      Effect.gen(function* () {
+        process.env.HOME = "/home/example";
+
+        const inventory = yield* InstalledSkills.load({
+          projectPath: "/workspace/repo",
+          target: { type: "local" },
+          tool: "claude-code",
+        });
+
+        assert.deepStrictEqual(
+          inventory.sources.map((source) => source.path),
+          ["/workspace/repo/.claude/skills", "/home/example/.claude/skills"],
+        );
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            restoreHome();
+          }),
+        ),
+      ),
+    );
+
+    test.effect("uses os home directory for local user sources when HOME is unset", () =>
+      Effect.gen(function* () {
+        delete process.env.HOME;
+
+        const inventory = yield* InstalledSkills.load({
+          target: { type: "local" },
+          tool: "codex",
+        });
+
+        const sourcePaths = new Set(inventory.sources.map((source) => source.path));
+
+        assert.match(homedir(), /.+/);
+        assert.ok(sourcePaths.has(join(homedir(), ".agents", "skills")));
+        assert.ok(!sourcePaths.has(".agents/skills"));
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            restoreHome();
+          }),
+        ),
+      ),
+    );
+  });
 });
 
 describe("OpenSSH", () => {
@@ -618,6 +697,14 @@ describe("OpenSSH", () => {
         "cat -- '/tmp/agent'\\''s config.toml'",
       ].join("; "),
     );
+  });
+
+  vitestTest("uses a POSIX-compatible remote directory listing command", () => {
+    const command = OpenSsh.unsafeOpenSshInternals.remoteReadDirectoryCommand("~/agent skills");
+
+    assert.notMatch(command, /-printf/);
+    assert.match(command, /for entry in/);
+    assert.match(command, /printf '%s\\t%s\\n'/);
   });
 
   vitestTest("does not classify arbitrary SSH exit code 2 as a missing remote file", () => {

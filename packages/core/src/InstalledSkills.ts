@@ -1,4 +1,5 @@
 import { Context, Effect, Layer } from "effect";
+import { homedir } from "node:os";
 import { join, posix } from "node:path";
 import type { DirectoryEntry } from "./AgentFileSystem.js";
 import * as AgentFileSystem from "./AgentFileSystem.js";
@@ -33,6 +34,7 @@ export interface InstalledSkillSource {
 export interface InstalledSkill {
   readonly agent: SkillAgent;
   readonly description?: string;
+  readonly error?: string;
   readonly metadataState: SkillMetadataState;
   readonly name: string;
   readonly path: string;
@@ -150,6 +152,7 @@ export const load = Effect.fn("InstalledSkills.load")(function* (options: ListOp
 
       const skill: InstalledSkill = {
         agent: plan.agent,
+        ...(metadata.error === undefined ? {} : { error: metadata.error }),
         metadataState: metadata.metadataState,
         name: metadata.name ?? entry.name,
         path: skillPath,
@@ -208,65 +211,70 @@ const pathJoin = (target: SkillsTarget, ...parts: readonly string[]) =>
   target.type === "local" ? join(...parts) : posix.join(...parts);
 
 const plannedSources = (options: ListOptions) =>
-  options.target.type === "local" ? localSourcePlans() : sshSourcePlans(options.projectPath);
+  options.target.type === "local"
+    ? localSourcePlans(options.projectPath)
+    : sshSourcePlans(options.projectPath);
 
-const localSourcePlans = (): readonly SourcePlan[] => [
-  {
-    agent: "claude-code",
-    path: join(process.cwd(), ".claude", "skills"),
-    scope: "project",
-  },
-  {
-    agent: "claude-code",
-    path: join(process.env.HOME ?? "", ".claude", "skills"),
-    scope: "user",
-  },
-  {
-    agent: "codex",
-    path: join(process.cwd(), ".agents", "skills"),
-    scope: "project",
-  },
-  {
-    agent: "codex",
-    path: join(process.env.HOME ?? "", ".agents", "skills"),
-    scope: "user",
-  },
-  {
-    agent: "codex",
-    path: "/etc/codex/skills",
-    scope: "system",
-  },
-  {
-    agent: "opencode",
-    path: join(process.cwd(), ".opencode", "skills"),
-    scope: "project",
-  },
-  {
-    agent: "opencode",
-    path: join(process.env.HOME ?? "", ".config", "opencode", "skills"),
-    scope: "user",
-  },
-  {
-    agent: "opencode",
-    path: join(process.cwd(), ".claude", "skills"),
-    scope: "project",
-  },
-  {
-    agent: "opencode",
-    path: join(process.env.HOME ?? "", ".claude", "skills"),
-    scope: "user",
-  },
-  {
-    agent: "opencode",
-    path: join(process.cwd(), ".agents", "skills"),
-    scope: "project",
-  },
-  {
-    agent: "opencode",
-    path: join(process.env.HOME ?? "", ".agents", "skills"),
-    scope: "user",
-  },
-];
+const localSourcePlans = (projectPath: string | undefined): readonly SourcePlan[] => {
+  const projectRoot =
+    projectPath === undefined || projectPath.length === 0 ? process.cwd() : projectPath;
+  const homeRoot = localHomeDirectory();
+  const userSource = (agent: SkillAgent, ...parts: readonly string[]): readonly SourcePlan[] =>
+    homeRoot === undefined
+      ? []
+      : [
+          {
+            agent,
+            path: join(homeRoot, ...parts),
+            scope: "user",
+          },
+        ];
+
+  return [
+    {
+      agent: "claude-code",
+      path: join(projectRoot, ".claude", "skills"),
+      scope: "project",
+    },
+    ...userSource("claude-code", ".claude", "skills"),
+    {
+      agent: "codex",
+      path: join(projectRoot, ".agents", "skills"),
+      scope: "project",
+    },
+    ...userSource("codex", ".agents", "skills"),
+    {
+      agent: "codex",
+      path: "/etc/codex/skills",
+      scope: "system",
+    },
+    {
+      agent: "opencode",
+      path: join(projectRoot, ".opencode", "skills"),
+      scope: "project",
+    },
+    ...userSource("opencode", ".config", "opencode", "skills"),
+    {
+      agent: "opencode",
+      path: join(projectRoot, ".claude", "skills"),
+      scope: "project",
+    },
+    ...userSource("opencode", ".claude", "skills"),
+    {
+      agent: "opencode",
+      path: join(projectRoot, ".agents", "skills"),
+      scope: "project",
+    },
+    ...userSource("opencode", ".agents", "skills"),
+  ];
+};
+
+const localHomeDirectory = () => {
+  const directory =
+    process.env.HOME === undefined || process.env.HOME.length === 0 ? homedir() : process.env.HOME;
+
+  return directory.length === 0 ? undefined : directory;
+};
 
 const sshSourcePlans = (projectPath: string | undefined): readonly SourcePlan[] => [
   ...(projectPath === undefined
@@ -300,7 +308,11 @@ const sshSourcePlans = (projectPath: string | undefined): readonly SourcePlan[] 
       ]),
   { agent: "claude-code", path: "~/.claude/skills", scope: "user" },
   { agent: "codex", path: "~/.agents/skills", scope: "user" },
-  { agent: "codex", path: "/etc/codex/skills", scope: "system" },
+  {
+    agent: "codex",
+    path: "/etc/codex/skills",
+    scope: "system",
+  },
   { agent: "opencode", path: "~/.config/opencode/skills", scope: "user" },
   { agent: "opencode", path: "~/.claude/skills", scope: "user" },
   { agent: "opencode", path: "~/.agents/skills", scope: "user" },
@@ -327,16 +339,32 @@ const parseSkillMetadata = (contents: string): ParsedSkillMetadata => {
 
   const metadata: { description?: string; name?: string } = {};
   const frontmatter = contents.slice(4, closing).split(/\r?\n/);
+  let skippingUnsupportedBlock = false;
 
   for (const line of frontmatter) {
     if (line.trim().length === 0) {
       continue;
     }
 
-    const match = /^(name|description):\s*(.*)$/.exec(line);
+    if (/^\s/.test(line)) {
+      if (skippingUnsupportedBlock) {
+        continue;
+      }
+
+      return { metadataState: "invalid-frontmatter" };
+    }
+
+    skippingUnsupportedBlock = false;
+
+    const match = /^([^:]+):\s*(.*)$/.exec(line);
 
     if (match === null || match[1] === undefined || match[2] === undefined) {
       return { metadataState: "invalid-frontmatter" };
+    }
+
+    if (match[1] !== "name" && match[1] !== "description") {
+      skippingUnsupportedBlock = true;
+      continue;
     }
 
     const value = parseScalar(match[2]);

@@ -78,7 +78,7 @@ export const createApp = (options: ApiOptions) => {
   });
 
   app.get("/skills", async (context) => {
-    const target = parseSkillsTarget(context.req.query("target"), context.req.query("alias"));
+    const target = parseConfigTarget(context.req.query("target"), context.req.query("alias"));
 
     if (target === undefined) {
       return context.json(
@@ -158,24 +158,6 @@ const parseConfigTarget = (
   target: string | undefined,
   alias: string | undefined,
 ): CodexConfigFile.ConfigTarget | undefined => {
-  if (target === "local") {
-    return { type: "local" };
-  }
-
-  if (target === "ssh" && alias !== undefined && alias.length > 0) {
-    return {
-      alias,
-      type: "ssh",
-    };
-  }
-
-  return undefined;
-};
-
-const parseSkillsTarget = (
-  target: string | undefined,
-  alias: string | undefined,
-): InstalledSkills.SkillsTarget | undefined => {
   if (target === "local") {
     return { type: "local" };
   }

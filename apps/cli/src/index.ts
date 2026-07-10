@@ -310,17 +310,26 @@ const renderSkills = (inventory: InstalledSkills.InstalledSkillsInventory) => {
       skill.source.state,
       skill.metadataState,
       skill.path,
+      skill.error ?? "",
     ]),
     ...inventory.sources
       .filter((source) => source.state !== "scanned")
-      .map((source) => [source.agent, "<source>", source.scope, source.state, "", source.path]),
+      .map((source) => [
+        source.agent,
+        "<source>",
+        source.scope,
+        source.state,
+        "",
+        source.path,
+        source.error ?? "",
+      ]),
   ];
 
   if (rows.length === 0) {
     return "Skills\nNo installed Skills found.\n";
   }
 
-  const header = ["Agent", "Name", "Scope", "SourceState", "MetadataState", "Path"];
+  const header = ["Agent", "Name", "Scope", "SourceState", "MetadataState", "Path", "Error"];
   const widths = header.map((heading, index) =>
     Math.max(heading.length, ...rows.map((row) => row[index]?.length ?? 0)),
   );

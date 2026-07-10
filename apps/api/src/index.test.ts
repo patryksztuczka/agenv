@@ -420,6 +420,40 @@ describe("api", () => {
     });
   });
 
+  it("returns local installed skills and forwards projectPath", async () => {
+    const app = createApp({
+      layer: Layer.mergeAll(
+        MachineInventory.layer({ machines: [] }),
+        AgentFileSystem.layer(
+          (path) => {
+            assert.strictEqual(path, "/srv/repo/.claude/skills/review/SKILL.md");
+
+            return Effect.succeed("---\nname: review\n---\nBody");
+          },
+          undefined,
+          (path) => {
+            if (path === "/srv/repo/.claude/skills") {
+              return Effect.succeed([{ isDirectory: true, name: "review" }]);
+            }
+
+            return Effect.fail(new AgentFileSystem.FileNotFound({ message: "missing" }));
+          },
+        ),
+        inertOpenSshLayer,
+        InstalledSkills.liveLayer,
+      ),
+    });
+
+    const response = await app.request(
+      "/skills?target=local&tool=claude-code&projectPath=/srv/repo",
+    );
+    const body = (await response.json()) as InstalledSkills.InstalledSkillsInventory;
+
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(body.sources[0]?.path, "/srv/repo/.claude/skills");
+    assert.strictEqual(body.skills[0]?.path, "/srv/repo/.claude/skills/review");
+  });
+
   it("rejects invalid installed skills targets", async () => {
     const app = createApp({
       layer: Layer.mergeAll(

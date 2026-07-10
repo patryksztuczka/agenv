@@ -962,8 +962,10 @@ describe("CLI Skill Visibility", () => {
         assert.match(result.stdout, /project/);
         assert.match(result.stdout, /SourceState/);
         assert.match(result.stdout, /MetadataState/);
+        assert.match(result.stdout, /Error/);
         assert.match(result.stdout, /parsed/);
         assert.match(result.stdout, /missing/);
+        assert.match(result.stdout, /No such file or directory/);
       }),
     );
 
