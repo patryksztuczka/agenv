@@ -1,5 +1,6 @@
 import { Context, Effect, Layer } from "effect";
-import { join } from "node:path";
+import { join, posix } from "node:path";
+import type { DirectoryEntry } from "./AgentFileSystem.js";
 import * as AgentFileSystem from "./AgentFileSystem.js";
 import * as OpenSsh from "./OpenSsh.js";
 
@@ -45,7 +46,17 @@ export interface SourcePlan {
   readonly scope: SkillSourceScope;
 }
 
+type SkillReadFailure = AgentFileSystem.FileReadFailure | OpenSsh.RemoteFileReadFailure;
+
+interface DirectoryReader {
+  readonly readDirectory: (
+    path: string,
+  ) => Effect.Effect<readonly DirectoryEntry[], SkillReadFailure>;
+  readonly readFile: (path: string) => Effect.Effect<string, SkillReadFailure>;
+}
+
 export interface ListOptions {
+  readonly projectPath?: string;
   readonly sourcePlans?: readonly SourcePlan[];
   readonly target: SkillsTarget;
   readonly tool?: SkillAgent;
@@ -90,14 +101,18 @@ export const list = Effect.fn("InstalledSkills.list")(function* (options: ListOp
 
 export const load = Effect.fn("InstalledSkills.load")(function* (options: ListOptions) {
   const fileSystem = yield* AgentFileSystem.AgentFileSystem;
-  const sourcePlans = (options.sourcePlans ?? localSourcePlans()).filter(
+  const reader =
+    options.target.type === "local"
+      ? localReader(fileSystem)
+      : remoteReader(options.target.alias, yield* OpenSsh.OpenSsh);
+  const sourcePlans = (options.sourcePlans ?? plannedSources(options)).filter(
     (plan) => options.tool === undefined || plan.agent === options.tool,
   );
   const sources: InstalledSkillSource[] = [];
   const skills: InstalledSkill[] = [];
 
   for (const plan of sourcePlans) {
-    const entriesResult = yield* fileSystem.readDirectory(plan.path).pipe(
+    const entriesResult = yield* reader.readDirectory(plan.path).pipe(
       Effect.match({
         onFailure: (failure) => ({ failure, type: "failure" as const }),
         onSuccess: (entries) => ({ entries, type: "success" as const }),
@@ -119,9 +134,9 @@ export const load = Effect.fn("InstalledSkills.load")(function* (options: ListOp
     sources.push(source);
 
     for (const entry of entriesResult.entries.filter((candidate) => candidate.isDirectory)) {
-      const skillPath = join(plan.path, entry.name);
-      const skillFilePath = join(skillPath, "SKILL.md");
-      const metadata = yield* fileSystem.readFile(skillFilePath).pipe(
+      const skillPath = pathJoin(options.target, plan.path, entry.name);
+      const skillFilePath = pathJoin(options.target, skillPath, "SKILL.md");
+      const metadata = yield* reader.readFile(skillFilePath).pipe(
         Effect.match({
           onFailure: (failure) => ({
             description: undefined,
@@ -162,14 +177,38 @@ export const load = Effect.fn("InstalledSkills.load")(function* (options: ListOp
 
 const sourceFromFailure = (
   plan: SourcePlan,
-  failure: AgentFileSystem.FileReadFailure,
+  failure: AgentFileSystem.FileReadFailure | OpenSsh.RemoteFileReadFailure,
 ): InstalledSkillSource => ({
   agent: plan.agent,
   error: failure.message,
   path: plan.path,
   scope: plan.scope,
-  state: failure instanceof AgentFileSystem.FileNotFound ? "missing" : "unreadable",
+  state:
+    failure instanceof OpenSsh.ConnectionFailed
+      ? "connection-failed"
+      : failure instanceof AgentFileSystem.FileNotFound ||
+          failure instanceof OpenSsh.RemoteFileNotFound
+        ? "missing"
+        : "unreadable",
 });
+
+const localReader = (
+  fileSystem: typeof AgentFileSystem.AgentFileSystem.Service,
+): DirectoryReader => ({
+  readDirectory: fileSystem.readDirectory,
+  readFile: fileSystem.readFile,
+});
+
+const remoteReader = (alias: string, openSsh: typeof OpenSsh.OpenSsh.Service): DirectoryReader => ({
+  readDirectory: (path) => openSsh.readDirectory(alias, path),
+  readFile: (path) => openSsh.readFile(alias, path),
+});
+
+const pathJoin = (target: SkillsTarget, ...parts: readonly string[]) =>
+  target.type === "local" ? join(...parts) : posix.join(...parts);
+
+const plannedSources = (options: ListOptions) =>
+  options.target.type === "local" ? localSourcePlans() : sshSourcePlans(options.projectPath);
 
 const localSourcePlans = (): readonly SourcePlan[] => [
   {
@@ -227,6 +266,44 @@ const localSourcePlans = (): readonly SourcePlan[] => [
     path: join(process.env.HOME ?? "", ".agents", "skills"),
     scope: "user",
   },
+];
+
+const sshSourcePlans = (projectPath: string | undefined): readonly SourcePlan[] => [
+  ...(projectPath === undefined
+    ? []
+    : [
+        {
+          agent: "claude-code" as const,
+          path: posix.join(projectPath, ".claude", "skills"),
+          scope: "project" as const,
+        },
+        {
+          agent: "codex" as const,
+          path: posix.join(projectPath, ".agents", "skills"),
+          scope: "project" as const,
+        },
+        {
+          agent: "opencode" as const,
+          path: posix.join(projectPath, ".opencode", "skills"),
+          scope: "project" as const,
+        },
+        {
+          agent: "opencode" as const,
+          path: posix.join(projectPath, ".claude", "skills"),
+          scope: "project" as const,
+        },
+        {
+          agent: "opencode" as const,
+          path: posix.join(projectPath, ".agents", "skills"),
+          scope: "project" as const,
+        },
+      ]),
+  { agent: "claude-code", path: "~/.claude/skills", scope: "user" },
+  { agent: "codex", path: "~/.agents/skills", scope: "user" },
+  { agent: "codex", path: "/etc/codex/skills", scope: "system" },
+  { agent: "opencode", path: "~/.config/opencode/skills", scope: "user" },
+  { agent: "opencode", path: "~/.claude/skills", scope: "user" },
+  { agent: "opencode", path: "~/.agents/skills", scope: "user" },
 ];
 
 interface ParsedSkillMetadata {

@@ -76,6 +76,8 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
   const skillToolFlag = Flag.choice("tool", ["claude-code", "codex", "opencode"] as const).pipe(
     Flag.optional,
   );
+  const hostFlag = Flag.string("host").pipe(Flag.optional);
+  const projectPathFlag = Flag.string("project-path").pipe(Flag.optional);
 
   const hosts = Command.make("hosts", { json: jsonFlag }, (config) =>
     Effect.gen(function* () {
@@ -87,21 +89,25 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
       yield* Ref.set(resultRef, success(stdout));
     }),
   );
-  const skills = Command.make("skills", { json: jsonFlag, tool: skillToolFlag }, (config) =>
-    Effect.gen(function* () {
-      const tool = Option.getOrUndefined(config.tool);
-      const inventory = yield* InstalledSkills.list({
-        target: {
-          type: "local",
-        },
-        ...(tool === undefined ? {} : { tool }),
-      });
-      const stdout = config.json
-        ? renderJson({ skills: inventory.skills, sources: inventory.sources })
-        : renderSkills(inventory);
+  const skills = Command.make(
+    "skills",
+    { host: hostFlag, json: jsonFlag, projectPath: projectPathFlag, tool: skillToolFlag },
+    (config) =>
+      Effect.gen(function* () {
+        const host = Option.getOrUndefined(config.host);
+        const projectPath = Option.getOrUndefined(config.projectPath);
+        const tool = Option.getOrUndefined(config.tool);
+        const inventory = yield* InstalledSkills.list({
+          target: host === undefined ? { type: "local" } : { alias: host, type: "ssh" },
+          ...(projectPath === undefined ? {} : { projectPath }),
+          ...(tool === undefined ? {} : { tool }),
+        });
+        const stdout = config.json
+          ? renderJson({ skills: inventory.skills, sources: inventory.sources })
+          : renderSkills(inventory);
 
-      yield* Ref.set(resultRef, success(stdout));
-    }),
+        yield* Ref.set(resultRef, success(stdout));
+      }),
   );
   const list = Command.make("list").pipe(Command.withSubcommands([hosts, skills]));
 

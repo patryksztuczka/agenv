@@ -352,6 +352,74 @@ describe("api", () => {
     });
   });
 
+  it("returns remote installed skills and forwards projectPath", async () => {
+    const app = createApp({
+      layer: Layer.mergeAll(
+        MachineInventory.layer({ machines: [] }),
+        AgentFileSystem.layer(() =>
+          Effect.fail(new AgentFileSystem.FileNotFound({ message: "unused" })),
+        ),
+        OpenSsh.layer({
+          readDirectory: (alias, path) => {
+            assert.strictEqual(alias, "workstation");
+
+            if (path === "/srv/repo/.claude/skills") {
+              return Effect.succeed([{ isDirectory: true, name: "review" }]);
+            }
+
+            return Effect.fail(new OpenSsh.RemoteFileNotFound({ message: "missing" }));
+          },
+          readFile: (_alias, path) => {
+            assert.strictEqual(path, "/srv/repo/.claude/skills/review/SKILL.md");
+
+            return Effect.succeed("---\nname: review\n---\nBody");
+          },
+          resolve: () => Effect.succeed(""),
+        }),
+        InstalledSkills.liveLayer,
+      ),
+    });
+
+    const response = await app.request(
+      "/skills?target=ssh&alias=workstation&tool=claude-code&projectPath=/srv/repo",
+    );
+
+    assert.strictEqual(response.status, 200);
+    assert.deepStrictEqual(await response.json(), {
+      skills: [
+        {
+          agent: "claude-code",
+          metadataState: "parsed",
+          name: "review",
+          path: "/srv/repo/.claude/skills/review",
+          skillFilePath: "/srv/repo/.claude/skills/review/SKILL.md",
+          source: {
+            agent: "claude-code",
+            path: "/srv/repo/.claude/skills",
+            scope: "project",
+            state: "scanned",
+          },
+        },
+      ],
+      sources: [
+        {
+          agent: "claude-code",
+          path: "/srv/repo/.claude/skills",
+          scope: "project",
+          state: "scanned",
+        },
+        {
+          agent: "claude-code",
+          error: "missing",
+          path: "~/.claude/skills",
+          scope: "user",
+          state: "missing",
+        },
+      ],
+      target: { alias: "workstation", type: "ssh" },
+    });
+  });
+
   it("rejects invalid installed skills targets", async () => {
     const app = createApp({
       layer: Layer.mergeAll(

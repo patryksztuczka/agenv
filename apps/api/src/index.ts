@@ -90,6 +90,7 @@ export const createApp = (options: ApiOptions) => {
     }
 
     const tool = parseSkillTool(context.req.query("tool"));
+    const projectPath = context.req.query("projectPath");
 
     if (tool === undefined && context.req.query("tool") !== undefined) {
       return context.json(
@@ -104,6 +105,7 @@ export const createApp = (options: ApiOptions) => {
       await runtime.runPromise(
         InstalledSkills.list({
           target,
+          ...(projectPath === undefined ? {} : { projectPath }),
           ...(tool === undefined ? {} : { tool }),
         }),
       ),

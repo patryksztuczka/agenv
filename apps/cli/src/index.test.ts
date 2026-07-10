@@ -979,6 +979,42 @@ describe("CLI Skill Visibility", () => {
       }),
     );
   });
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(() =>
+        Effect.fail(new AgentFileSystem.FileNotFound({ message: "unused" })),
+      ),
+      OpenSsh.layer({
+        readDirectory: (alias, path) => {
+          assert.strictEqual(alias, "workstation");
+
+          if (path === "~/.claude/skills") {
+            return Effect.succeed([{ isDirectory: true, name: "debug" }]);
+          }
+
+          return Effect.fail(new OpenSsh.ConnectionFailed({ message: "ssh failed" }));
+        },
+        readFile: (_alias, path) => {
+          assert.strictEqual(path, "~/.claude/skills/debug/SKILL.md");
+
+          return Effect.succeed("---\nname: debug\ndescription: Debug remotely\n---\nBody");
+        },
+        resolve: () => Effect.succeed(""),
+      }),
+      InstalledSkills.liveLayer,
+    ),
+  )((test) => {
+    test.effect("renders remote Installed Skills and connection-failed sources", () =>
+      Effect.gen(function* () {
+        const result = yield* runCli(["list", "skills", "--host", "workstation"]);
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.match(result.stdout, /debug/);
+        assert.match(result.stdout, /connection-failed/);
+      }),
+    );
+  });
 });
 
 describe("CLI Package Manager Diagnostics", () => {

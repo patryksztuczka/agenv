@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Schema } from "effect";
+import type { DirectoryEntry } from "./AgentFileSystem.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -54,6 +55,10 @@ export class OpenSsh extends Context.Service<
       alias: string,
       path: string,
     ) => Effect.Effect<string, RemoteFileReadFailure>;
+    readonly readDirectory: (
+      alias: string,
+      path: string,
+    ) => Effect.Effect<readonly DirectoryEntry[], RemoteFileReadFailure>;
     readonly writeFile: (
       alias: string,
       path: string,
@@ -68,6 +73,10 @@ export class OpenSsh extends Context.Service<
  */
 export const layer = (options: {
   readonly readFile?: (alias: string, path: string) => Effect.Effect<string, RemoteFileReadFailure>;
+  readonly readDirectory?: (
+    alias: string,
+    path: string,
+  ) => Effect.Effect<readonly DirectoryEntry[], RemoteFileReadFailure>;
   readonly writeFile?: (
     alias: string,
     path: string,
@@ -82,6 +91,14 @@ export const layer = (options: {
         Effect.fail(
           new ConnectionFailed({
             message: `OpenSSH remote file read is not configured for ${alias}:${path}`,
+          }),
+        )),
+    readDirectory:
+      options.readDirectory ??
+      ((alias, path) =>
+        Effect.fail(
+          new ConnectionFailed({
+            message: `OpenSSH remote directory read is not configured for ${alias}:${path}`,
           }),
         )),
     writeFile:
@@ -103,6 +120,20 @@ export const layer = (options: {
  * can be classified into stable error types.
  */
 export const liveLayer = Layer.succeed(OpenSsh)({
+  readDirectory: (alias, path) =>
+    Effect.tryPromise({
+      catch: (error) => classifyRemoteReadFailure(error),
+      try: async () => {
+        validateAlias(alias);
+
+        const result = await execFilePromise("ssh", [
+          alias,
+          remoteShellCommand(remoteReadDirectoryCommand(path)),
+        ]);
+
+        return parseDirectoryEntries(result.stdout);
+      },
+    }),
   readFile: (alias, path) =>
     Effect.tryPromise({
       catch: (error) => classifyRemoteReadFailure(error),
@@ -149,6 +180,8 @@ export const liveLayer = Layer.succeed(OpenSsh)({
 
 export const unsafeOpenSshInternals = {
   classifyRemoteReadFailure,
+  parseDirectoryEntries,
+  remoteReadDirectoryCommand,
   remoteReadCommand,
   remoteShellCommand,
   remoteWriteCommand,
@@ -161,6 +194,22 @@ function validateAlias(alias: string) {
       message: `Unsafe SSH alias: ${alias}`,
     });
   }
+}
+
+function remoteReadDirectoryCommand(path: string) {
+  const quotedPath = shellPath(path);
+
+  return [
+    `if [ ! -e ${quotedPath} ]; then ${remoteFailureCommand(
+      REMOTE_FILE_MISSING_MARKER,
+      REMOTE_FILE_MISSING_EXIT_CODE,
+    )}; fi`,
+    `if [ ! -r ${quotedPath} ] || [ ! -d ${quotedPath} ]; then ${remoteFailureCommand(
+      REMOTE_FILE_UNREADABLE_MARKER,
+      REMOTE_FILE_UNREADABLE_EXIT_CODE,
+    )}; fi`,
+    `find ${quotedPath} -mindepth 1 -maxdepth 1 -printf '%f\\t%y\\n'`,
+  ].join("; ");
 }
 
 function remoteReadCommand(path: string) {
@@ -177,6 +226,22 @@ function remoteReadCommand(path: string) {
     )}; fi`,
     `cat -- ${quotedPath}`,
   ].join("; ");
+}
+
+function parseDirectoryEntries(stdout: string): readonly DirectoryEntry[] {
+  return stdout
+    .split(/\r?\n/)
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const separator = line.lastIndexOf("\t");
+      const name = separator === -1 ? line : line.slice(0, separator);
+      const type = separator === -1 ? "" : line.slice(separator + 1);
+
+      return {
+        isDirectory: type === "d",
+        name,
+      };
+    });
 }
 
 function remoteFailureCommand(marker: string, exitCode: number) {

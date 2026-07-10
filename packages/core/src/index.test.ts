@@ -486,6 +486,108 @@ describe("Installed Skills", () => {
       }),
     );
   });
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(() =>
+        Effect.fail(new AgentFileSystem.FileNotFound({ message: "local unused" })),
+      ),
+      OpenSsh.layer({
+        readDirectory: (_alias, path) => {
+          if (path === "~/.claude/skills") {
+            return Effect.succeed([{ isDirectory: true, name: "debug" }]);
+          }
+
+          if (path === "~/.agents/skills") {
+            return Effect.fail(new OpenSsh.RemoteFileNotFound({ message: "remote missing" }));
+          }
+
+          if (path === "/etc/codex/skills") {
+            return Effect.fail(new OpenSsh.RemoteFileUnreadable({ message: "permission denied" }));
+          }
+
+          return Effect.fail(new OpenSsh.ConnectionFailed({ message: "ssh failed" }));
+        },
+        readFile: (_alias, path) => {
+          assert.strictEqual(path, "~/.claude/skills/debug/SKILL.md");
+
+          return Effect.succeed("---\nname: debug\ndescription: Debug remotely\n---\nBody");
+        },
+        resolve: () => Effect.succeed(""),
+      }),
+    ),
+  )((test) => {
+    test.effect("lists remote skills and classifies remote source failures", () =>
+      Effect.gen(function* () {
+        const inventory = yield* InstalledSkills.load({
+          sourcePlans: [
+            { agent: "claude-code", path: "~/.claude/skills", scope: "user" },
+            { agent: "codex", path: "~/.agents/skills", scope: "user" },
+            { agent: "codex", path: "/etc/codex/skills", scope: "system" },
+            { agent: "opencode", path: "~/.config/opencode/skills", scope: "user" },
+          ],
+          target: { alias: "workstation", type: "ssh" },
+        });
+
+        assert.deepStrictEqual(
+          inventory.sources.map((source) => [source.path, source.state, source.error]),
+          [
+            ["~/.claude/skills", "scanned", undefined],
+            ["~/.agents/skills", "missing", "remote missing"],
+            ["/etc/codex/skills", "unreadable", "permission denied"],
+            ["~/.config/opencode/skills", "connection-failed", "ssh failed"],
+          ],
+        );
+        assert.deepStrictEqual(inventory.skills, [
+          {
+            agent: "claude-code",
+            description: "Debug remotely",
+            metadataState: "parsed",
+            name: "debug",
+            path: "~/.claude/skills/debug",
+            skillFilePath: "~/.claude/skills/debug/SKILL.md",
+            source: inventory.sources[0],
+          },
+        ]);
+      }),
+    );
+  });
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(() =>
+        Effect.fail(new AgentFileSystem.FileNotFound({ message: "local unused" })),
+      ),
+      OpenSsh.layer({
+        readDirectory: (_alias, path) => Effect.succeed([{ isDirectory: true, name: path }]),
+        readFile: () => Effect.succeed("---\nname: remote\n---\nBody"),
+        resolve: () => Effect.succeed(""),
+      }),
+    ),
+  )((test) => {
+    test.effect("omits SSH project roots unless projectPath is supplied", () =>
+      Effect.gen(function* () {
+        const withoutProjectPath = yield* InstalledSkills.load({
+          target: { alias: "workstation", type: "ssh" },
+          tool: "claude-code",
+        });
+        const withProjectPath = yield* InstalledSkills.load({
+          projectPath: "/srv/repo",
+          target: { alias: "workstation", type: "ssh" },
+          tool: "claude-code",
+        });
+
+        assert.deepStrictEqual(
+          withoutProjectPath.sources.map((source) => source.path),
+          ["~/.claude/skills"],
+        );
+        assert.deepStrictEqual(
+          withProjectPath.sources.map((source) => source.path),
+          ["/srv/repo/.claude/skills", "~/.claude/skills"],
+        );
+      }),
+    );
+  });
 });
 
 describe("OpenSSH", () => {
