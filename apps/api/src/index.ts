@@ -1,8 +1,14 @@
 import { serve } from "@hono/node-server";
-import { AgentFileSystem, CodexConfigFile, MachineInventory, OpenSsh } from "@agenv/core";
+import {
+  AgentFileSystem,
+  CodexConfigFile,
+  InstalledSkills,
+  MachineInventory,
+  OpenSsh,
+} from "@agenv/core";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { Hono } from "hono";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,7 +21,10 @@ export interface ApiOptions {
    * into a ManagedRuntime inside `createApp` and reused for each request.
    */
   readonly layer: Layer.Layer<
-    MachineInventory.MachineInventoryService | AgentFileSystem.AgentFileSystem | OpenSsh.OpenSsh
+    | AgentFileSystem.AgentFileSystem
+    | InstalledSkills.InstalledSkillsService
+    | MachineInventory.MachineInventoryService
+    | OpenSsh.OpenSsh
   >;
 }
 
@@ -68,6 +77,21 @@ export const createApp = (options: ApiOptions) => {
     return context.json(snapshot);
   });
 
+  app.get("/skills", async (context) => {
+    const target = parseSkillsTarget(context.req.query("target"), context.req.query("alias"));
+
+    if (target === undefined) {
+      return context.json(
+        {
+          error: "target must be local or ssh with alias",
+        },
+        400,
+      );
+    }
+
+    return context.json(await runtime.runPromise(InstalledSkills.list({ target })));
+  });
+
   return app;
 };
 
@@ -88,13 +112,25 @@ const app = createApp({
     MachineInventory.liveLayer({
       sshConfigPath: join(homeDirectory(), ".ssh", "config"),
     }),
-    AgentFileSystem.layer((path) =>
-      Effect.tryPromise({
-        catch: AgentFileSystem.classifyReadFailure,
-        try: () => readFile(path, "utf8"),
-      }),
+    AgentFileSystem.layer(
+      (path) =>
+        Effect.tryPromise({
+          catch: AgentFileSystem.classifyReadFailure,
+          try: () => readFile(path, "utf8"),
+        }),
+      undefined,
+      (path) =>
+        Effect.tryPromise({
+          catch: AgentFileSystem.classifyReadFailure,
+          try: async () =>
+            (await readdir(path, { withFileTypes: true })).map((entry) => ({
+              isDirectory: entry.isDirectory(),
+              name: entry.name,
+            })),
+        }),
     ),
     OpenSsh.liveLayer,
+    InstalledSkills.liveLayer,
   ),
 });
 
@@ -102,6 +138,24 @@ const parseConfigTarget = (
   target: string | undefined,
   alias: string | undefined,
 ): CodexConfigFile.ConfigTarget | undefined => {
+  if (target === "local") {
+    return { type: "local" };
+  }
+
+  if (target === "ssh" && alias !== undefined && alias.length > 0) {
+    return {
+      alias,
+      type: "ssh",
+    };
+  }
+
+  return undefined;
+};
+
+const parseSkillsTarget = (
+  target: string | undefined,
+  alias: string | undefined,
+): InstalledSkills.SkillsTarget | undefined => {
   if (target === "local") {
     return { type: "local" };
   }

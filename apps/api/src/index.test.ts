@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { AgentFileSystem, MachineInventory, OpenSsh } from "@agenv/core";
+import { AgentFileSystem, InstalledSkills, MachineInventory, OpenSsh } from "@agenv/core";
 import { Effect, Layer } from "effect";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +41,7 @@ describe("api", () => {
           ),
         ),
         inertOpenSshLayer,
+        emptyInstalledSkillsLayer,
       ),
     });
     const response = await app.request("/machines");
@@ -71,6 +72,7 @@ describe("api", () => {
         }),
         AgentFileSystem.layer(() => Effect.succeed("")),
         inertOpenSshLayer,
+        emptyInstalledSkillsLayer,
       ),
     });
     const response = await app.request("/codex/config?target=local");
@@ -107,6 +109,7 @@ describe("api", () => {
           },
           resolve: () => Effect.succeed(""),
         }),
+        emptyInstalledSkillsLayer,
       ),
     });
     const response = await app.request("/codex/config?target=ssh&alias=workstation");
@@ -143,6 +146,7 @@ describe("api", () => {
             ),
           resolve: () => Effect.succeed(""),
         }),
+        emptyInstalledSkillsLayer,
       ),
     });
     const response = await app.request("/codex/config?target=ssh&alias=workstation");
@@ -154,6 +158,92 @@ describe("api", () => {
       managedFile: "config.toml",
       path: "workstation:~/.codex/config.toml",
       state: "connection-failed",
+    });
+  });
+
+  it("returns installed skills from the core inventory", async () => {
+    const app = createApp({
+      layer: Layer.mergeAll(
+        MachineInventory.layer({ machines: [] }),
+        AgentFileSystem.layer(() => Effect.succeed("")),
+        inertOpenSshLayer,
+        InstalledSkills.layer({
+          skills: [
+            {
+              agent: "claude-code",
+              description: "Review code",
+              metadataState: "parsed",
+              name: "review",
+              path: "/repo/.claude/skills/review",
+              skillFilePath: "/repo/.claude/skills/review/SKILL.md",
+              source: {
+                agent: "claude-code",
+                path: "/repo/.claude/skills",
+                scope: "project",
+                state: "scanned",
+              },
+            },
+          ],
+          sources: [
+            {
+              agent: "claude-code",
+              path: "/repo/.claude/skills",
+              scope: "project",
+              state: "scanned",
+            },
+          ],
+          target: { type: "local" },
+        }),
+      ),
+    });
+
+    const response = await app.request("/skills?target=local");
+
+    assert.strictEqual(response.status, 200);
+    assert.deepStrictEqual(await response.json(), {
+      skills: [
+        {
+          agent: "claude-code",
+          description: "Review code",
+          metadataState: "parsed",
+          name: "review",
+          path: "/repo/.claude/skills/review",
+          skillFilePath: "/repo/.claude/skills/review/SKILL.md",
+          source: {
+            agent: "claude-code",
+            path: "/repo/.claude/skills",
+            scope: "project",
+            state: "scanned",
+          },
+        },
+      ],
+      sources: [
+        {
+          agent: "claude-code",
+          path: "/repo/.claude/skills",
+          scope: "project",
+          state: "scanned",
+        },
+      ],
+      target: { type: "local" },
+    });
+  });
+
+  it("rejects invalid installed skills targets", async () => {
+    const app = createApp({
+      layer: Layer.mergeAll(
+        MachineInventory.layer({ machines: [] }),
+        AgentFileSystem.layer(() => Effect.succeed("")),
+        inertOpenSshLayer,
+        emptyInstalledSkillsLayer,
+      ),
+    });
+
+    const response = await app.request("/skills?target=ssh");
+
+    assert.strictEqual(response.status, 400);
+    assert.deepStrictEqual(await response.json(), {
+      error: "target must be local or ssh with alias",
     });
   });
 });
@@ -171,4 +261,10 @@ const inertOpenSshLayer = OpenSsh.layer({
         message: "OpenSSH is not expected in this test",
       }),
     ),
+});
+
+const emptyInstalledSkillsLayer = InstalledSkills.layer({
+  skills: [],
+  sources: [],
+  target: { type: "local" },
 });

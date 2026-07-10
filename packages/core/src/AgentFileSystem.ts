@@ -1,5 +1,10 @@
 import { Context, Effect, Layer, Schema } from "effect";
 
+export interface DirectoryEntry {
+  readonly isDirectory: boolean;
+  readonly name: string;
+}
+
 /**
  * Expected read failure when a file does not exist at the filesystem boundary.
  */
@@ -43,6 +48,9 @@ export class AgentFileSystem extends Context.Service<
   AgentFileSystem,
   {
     readonly readFile: (path: string) => Effect.Effect<string, FileReadFailure>;
+    readonly readDirectory: (
+      path: string,
+    ) => Effect.Effect<readonly DirectoryEntry[], FileReadFailure>;
     readonly writeFile: (path: string, contents: string) => Effect.Effect<void, FileReadFailure>;
   }
 >()("AgentFileSystem") {}
@@ -56,8 +64,17 @@ export class AgentFileSystem extends Context.Service<
 export const layer = (
   readFile: (path: string) => Effect.Effect<string, FileReadFailure>,
   writeFile?: (path: string, contents: string) => Effect.Effect<void, FileReadFailure>,
+  readDirectory?: (path: string) => Effect.Effect<readonly DirectoryEntry[], FileReadFailure>,
 ) =>
   Layer.succeed(AgentFileSystem)({
+    readDirectory:
+      readDirectory ??
+      ((path) =>
+        Effect.fail(
+          new FileUnreadable({
+            message: `AgentFileSystem directory read is not configured for ${path}`,
+          }),
+        )),
     readFile,
     writeFile:
       writeFile ??

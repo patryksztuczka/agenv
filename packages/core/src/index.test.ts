@@ -8,6 +8,7 @@ import {
   AgentFileSystem,
   CodexConfigDiff,
   CodexConfigFile,
+  InstalledSkills,
   MachineInventory,
   OpenSsh,
   PackageManagerDiagnostics,
@@ -284,6 +285,120 @@ describe("Machine Inventory", () => {
           path: "workstation:~/.codex/config.toml",
           state: "unreadable",
         });
+      }),
+    );
+  });
+});
+
+describe("Installed Skills", () => {
+  const sourcePlans: readonly InstalledSkills.SourcePlan[] = [
+    {
+      agent: "claude-code",
+      path: "/repo/.claude/skills",
+      scope: "project",
+    },
+    {
+      agent: "claude-code",
+      path: "/home/example/.claude/skills",
+      scope: "user",
+    },
+  ];
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(
+        (path) => {
+          assert.strictEqual(path, "/repo/.claude/skills/review/SKILL.md");
+
+          return Effect.succeed("---\nname: review\ndescription: Review code\n---\nUse carefully.");
+        },
+        undefined,
+        (path) =>
+          path === "/repo/.claude/skills"
+            ? Effect.succeed([
+                {
+                  isDirectory: true,
+                  name: "review",
+                },
+              ])
+            : Effect.fail(
+                new AgentFileSystem.FileNotFound({
+                  message: "No such file or directory",
+                }),
+              ),
+      ),
+      OpenSsh.layer({
+        resolve: () => Effect.succeed(""),
+      }),
+    ),
+  )((test) => {
+    test.effect("lists parsed local Claude Code skills with source provenance", () =>
+      Effect.gen(function* () {
+        const inventory = yield* InstalledSkills.load({
+          sourcePlans,
+          target: { type: "local" },
+        });
+
+        assert.deepStrictEqual(inventory.sources, [
+          {
+            agent: "claude-code",
+            path: "/repo/.claude/skills",
+            scope: "project",
+            state: "scanned",
+          },
+          {
+            agent: "claude-code",
+            error: "No such file or directory",
+            path: "/home/example/.claude/skills",
+            scope: "user",
+            state: "missing",
+          },
+        ]);
+        assert.deepStrictEqual(inventory.skills, [
+          {
+            agent: "claude-code",
+            description: "Review code",
+            metadataState: "parsed",
+            name: "review",
+            path: "/repo/.claude/skills/review",
+            skillFilePath: "/repo/.claude/skills/review/SKILL.md",
+            source: inventory.sources[0],
+          },
+        ]);
+      }),
+    );
+  });
+
+  layer(
+    AgentFileSystem.layer(
+      (path) =>
+        path.includes("missing-frontmatter")
+          ? Effect.succeed("No frontmatter")
+          : Effect.succeed("---\nname: [invalid]\n---\nBody"),
+      undefined,
+      (path) =>
+        path === "/repo/.claude/skills"
+          ? Effect.succeed([
+              { isDirectory: true, name: "missing-frontmatter" },
+              { isDirectory: true, name: "invalid-frontmatter" },
+            ])
+          : Effect.fail(new AgentFileSystem.FileUnreadable({ message: "permission denied" })),
+    ),
+  )((test) => {
+    test.effect("classifies missing and invalid skill frontmatter", () =>
+      Effect.gen(function* () {
+        const inventory = yield* InstalledSkills.load({
+          sourcePlans: [sourcePlans[0]],
+          target: { type: "local" },
+        });
+
+        assert.deepStrictEqual(
+          inventory.skills.map((skill) => [skill.name, skill.metadataState]),
+          [
+            ["missing-frontmatter", "missing-frontmatter"],
+            ["invalid-frontmatter", "invalid-frontmatter"],
+          ],
+        );
       }),
     );
   });

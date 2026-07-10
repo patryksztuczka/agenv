@@ -1,4 +1,10 @@
-import { AgentFileSystem, MachineInventory, OpenSsh, PackageManagerDiagnostics } from "@agenv/core";
+import {
+  AgentFileSystem,
+  InstalledSkills,
+  MachineInventory,
+  OpenSsh,
+  PackageManagerDiagnostics,
+} from "@agenv/core";
 import { assert, describe, layer } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import { createHash } from "node:crypto";
@@ -824,6 +830,100 @@ describe("CLI Host Visibility", () => {
         assert.match(result.stdout, /State: connection-failed/);
         assert.match(result.stdout, /Path: workstation:~\/\.codex\/config\.toml/);
         assert.match(result.stdout, /ssh: connect to host workstation port 22: Connection refused/);
+      }),
+    );
+  });
+});
+
+describe("CLI Skill Visibility", () => {
+  layer(
+    InstalledSkills.layer({
+      skills: [
+        {
+          agent: "claude-code",
+          description: "Review code",
+          metadataState: "parsed",
+          name: "review",
+          path: "/repo/.claude/skills/review",
+          skillFilePath: "/repo/.claude/skills/review/SKILL.md",
+          source: {
+            agent: "claude-code",
+            path: "/repo/.claude/skills",
+            scope: "project",
+            state: "scanned",
+          },
+        },
+      ],
+      sources: [
+        {
+          agent: "claude-code",
+          path: "/repo/.claude/skills",
+          scope: "project",
+          state: "scanned",
+        },
+        {
+          agent: "claude-code",
+          error: "No such file or directory",
+          path: "/home/example/.claude/skills",
+          scope: "user",
+          state: "missing",
+        },
+      ],
+      target: { type: "local" },
+    }),
+  )((test) => {
+    test.effect("renders Installed Skills as JSON for agents", () =>
+      Effect.gen(function* () {
+        const result = yield* runCli(["list", "skills", "--json"]);
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.deepStrictEqual(JSON.parse(result.stdout), {
+          skills: [
+            {
+              agent: "claude-code",
+              description: "Review code",
+              metadataState: "parsed",
+              name: "review",
+              path: "/repo/.claude/skills/review",
+              skillFilePath: "/repo/.claude/skills/review/SKILL.md",
+              source: {
+                agent: "claude-code",
+                path: "/repo/.claude/skills",
+                scope: "project",
+                state: "scanned",
+              },
+            },
+          ],
+          sources: [
+            {
+              agent: "claude-code",
+              path: "/repo/.claude/skills",
+              scope: "project",
+              state: "scanned",
+            },
+            {
+              agent: "claude-code",
+              error: "No such file or directory",
+              path: "/home/example/.claude/skills",
+              scope: "user",
+              state: "missing",
+            },
+          ],
+        });
+      }),
+    );
+
+    test.effect("renders Installed Skills as a human table", () =>
+      Effect.gen(function* () {
+        const result = yield* runCli(["list", "skills"]);
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.match(result.stdout, /Skills/);
+        assert.match(result.stdout, /claude-code/);
+        assert.match(result.stdout, /review/);
+        assert.match(result.stdout, /project/);
+        assert.match(result.stdout, /parsed/);
+        assert.match(result.stdout, /missing/);
       }),
     );
   });
