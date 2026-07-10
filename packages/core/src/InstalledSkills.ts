@@ -48,6 +48,7 @@ export interface SourcePlan {
 export interface ListOptions {
   readonly sourcePlans?: readonly SourcePlan[];
   readonly target: SkillsTarget;
+  readonly tool?: SkillAgent;
 }
 
 export class InstalledSkillsService extends Context.Service<
@@ -65,7 +66,16 @@ export class InstalledSkillsService extends Context.Service<
 
 export const layer = (inventory: InstalledSkillsInventory) =>
   Layer.succeed(InstalledSkillsService)({
-    list: () => Effect.succeed(inventory),
+    list: (options) =>
+      Effect.succeed(
+        options.tool === undefined
+          ? inventory
+          : {
+              ...inventory,
+              skills: inventory.skills.filter((skill) => skill.agent === options.tool),
+              sources: inventory.sources.filter((source) => source.agent === options.tool),
+            },
+      ),
   });
 
 export const liveLayer = Layer.succeed(InstalledSkillsService)({
@@ -80,7 +90,9 @@ export const list = Effect.fn("InstalledSkills.list")(function* (options: ListOp
 
 export const load = Effect.fn("InstalledSkills.load")(function* (options: ListOptions) {
   const fileSystem = yield* AgentFileSystem.AgentFileSystem;
-  const sourcePlans = options.sourcePlans ?? localClaudeCodeSourcePlans();
+  const sourcePlans = (options.sourcePlans ?? localSourcePlans()).filter(
+    (plan) => options.tool === undefined || plan.agent === options.tool,
+  );
   const sources: InstalledSkillSource[] = [];
   const skills: InstalledSkill[] = [];
 
@@ -159,7 +171,7 @@ const sourceFromFailure = (
   state: failure instanceof AgentFileSystem.FileNotFound ? "missing" : "unreadable",
 });
 
-const localClaudeCodeSourcePlans = (): readonly SourcePlan[] => [
+const localSourcePlans = (): readonly SourcePlan[] => [
   {
     agent: "claude-code",
     path: join(process.cwd(), ".claude", "skills"),
@@ -168,6 +180,51 @@ const localClaudeCodeSourcePlans = (): readonly SourcePlan[] => [
   {
     agent: "claude-code",
     path: join(process.env.HOME ?? "", ".claude", "skills"),
+    scope: "user",
+  },
+  {
+    agent: "codex",
+    path: join(process.cwd(), ".agents", "skills"),
+    scope: "project",
+  },
+  {
+    agent: "codex",
+    path: join(process.env.HOME ?? "", ".agents", "skills"),
+    scope: "user",
+  },
+  {
+    agent: "codex",
+    path: "/etc/codex/skills",
+    scope: "system",
+  },
+  {
+    agent: "opencode",
+    path: join(process.cwd(), ".opencode", "skills"),
+    scope: "project",
+  },
+  {
+    agent: "opencode",
+    path: join(process.env.HOME ?? "", ".config", "opencode", "skills"),
+    scope: "user",
+  },
+  {
+    agent: "opencode",
+    path: join(process.cwd(), ".claude", "skills"),
+    scope: "project",
+  },
+  {
+    agent: "opencode",
+    path: join(process.env.HOME ?? "", ".claude", "skills"),
+    scope: "user",
+  },
+  {
+    agent: "opencode",
+    path: join(process.cwd(), ".agents", "skills"),
+    scope: "project",
+  },
+  {
+    agent: "opencode",
+    path: join(process.env.HOME ?? "", ".agents", "skills"),
     scope: "user",
   },
 ];

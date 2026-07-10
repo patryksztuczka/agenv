@@ -89,7 +89,25 @@ export const createApp = (options: ApiOptions) => {
       );
     }
 
-    return context.json(await runtime.runPromise(InstalledSkills.list({ target })));
+    const tool = parseSkillTool(context.req.query("tool"));
+
+    if (tool === undefined && context.req.query("tool") !== undefined) {
+      return context.json(
+        {
+          error: "tool must be claude-code, codex, or opencode",
+        },
+        400,
+      );
+    }
+
+    return context.json(
+      await runtime.runPromise(
+        InstalledSkills.list({
+          target,
+          ...(tool === undefined ? {} : { tool }),
+        }),
+      ),
+    );
   });
 
   return app;
@@ -165,6 +183,14 @@ const parseSkillsTarget = (
       alias,
       type: "ssh",
     };
+  }
+
+  return undefined;
+};
+
+const parseSkillTool = (tool: string | undefined): InstalledSkills.SkillAgent | undefined => {
+  if (tool === "claude-code" || tool === "codex" || tool === "opencode") {
+    return tool;
   }
 
   return undefined;

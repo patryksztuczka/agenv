@@ -183,11 +183,30 @@ describe("api", () => {
                 state: "scanned",
               },
             },
+            {
+              agent: "opencode",
+              metadataState: "parsed",
+              name: "debug",
+              path: "/repo/.opencode/skills/debug",
+              skillFilePath: "/repo/.opencode/skills/debug/SKILL.md",
+              source: {
+                agent: "opencode",
+                path: "/repo/.opencode/skills",
+                scope: "project",
+                state: "scanned",
+              },
+            },
           ],
           sources: [
             {
               agent: "claude-code",
               path: "/repo/.claude/skills",
+              scope: "project",
+              state: "scanned",
+            },
+            {
+              agent: "opencode",
+              path: "/repo/.opencode/skills",
               scope: "project",
               state: "scanned",
             },
@@ -216,11 +235,115 @@ describe("api", () => {
             state: "scanned",
           },
         },
+        {
+          agent: "opencode",
+          metadataState: "parsed",
+          name: "debug",
+          path: "/repo/.opencode/skills/debug",
+          skillFilePath: "/repo/.opencode/skills/debug/SKILL.md",
+          source: {
+            agent: "opencode",
+            path: "/repo/.opencode/skills",
+            scope: "project",
+            state: "scanned",
+          },
+        },
       ],
       sources: [
         {
           agent: "claude-code",
           path: "/repo/.claude/skills",
+          scope: "project",
+          state: "scanned",
+        },
+        {
+          agent: "opencode",
+          path: "/repo/.opencode/skills",
+          scope: "project",
+          state: "scanned",
+        },
+      ],
+      target: { type: "local" },
+    });
+  });
+
+  it("filters installed skills by tool", async () => {
+    const app = createApp({
+      layer: Layer.mergeAll(
+        MachineInventory.layer({ machines: [] }),
+        AgentFileSystem.layer(() => Effect.succeed("")),
+        inertOpenSshLayer,
+        InstalledSkills.layer({
+          skills: [
+            {
+              agent: "claude-code",
+              metadataState: "parsed",
+              name: "review",
+              path: "/repo/.claude/skills/review",
+              skillFilePath: "/repo/.claude/skills/review/SKILL.md",
+              source: {
+                agent: "claude-code",
+                path: "/repo/.claude/skills",
+                scope: "project",
+                state: "scanned",
+              },
+            },
+            {
+              agent: "opencode",
+              metadataState: "parsed",
+              name: "debug",
+              path: "/repo/.opencode/skills/debug",
+              skillFilePath: "/repo/.opencode/skills/debug/SKILL.md",
+              source: {
+                agent: "opencode",
+                path: "/repo/.opencode/skills",
+                scope: "project",
+                state: "scanned",
+              },
+            },
+          ],
+          sources: [
+            {
+              agent: "claude-code",
+              path: "/repo/.claude/skills",
+              scope: "project",
+              state: "scanned",
+            },
+            {
+              agent: "opencode",
+              path: "/repo/.opencode/skills",
+              scope: "project",
+              state: "scanned",
+            },
+          ],
+          target: { type: "local" },
+        }),
+      ),
+    });
+
+    const response = await app.request("/skills?target=local&tool=opencode");
+
+    assert.strictEqual(response.status, 200);
+    assert.deepStrictEqual(await response.json(), {
+      skills: [
+        {
+          agent: "opencode",
+          metadataState: "parsed",
+          name: "debug",
+          path: "/repo/.opencode/skills/debug",
+          skillFilePath: "/repo/.opencode/skills/debug/SKILL.md",
+          source: {
+            agent: "opencode",
+            path: "/repo/.opencode/skills",
+            scope: "project",
+            state: "scanned",
+          },
+        },
+      ],
+      sources: [
+        {
+          agent: "opencode",
+          path: "/repo/.opencode/skills",
           scope: "project",
           state: "scanned",
         },

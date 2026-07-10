@@ -73,6 +73,9 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
   const jsonFlag = Flag.boolean("json");
   const applyFlag = Flag.boolean("apply");
   const rawFlag = Flag.boolean("raw");
+  const skillToolFlag = Flag.choice("tool", ["claude-code", "codex", "opencode"] as const).pipe(
+    Flag.optional,
+  );
 
   const hosts = Command.make("hosts", { json: jsonFlag }, (config) =>
     Effect.gen(function* () {
@@ -84,12 +87,14 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
       yield* Ref.set(resultRef, success(stdout));
     }),
   );
-  const skills = Command.make("skills", { json: jsonFlag }, (config) =>
+  const skills = Command.make("skills", { json: jsonFlag, tool: skillToolFlag }, (config) =>
     Effect.gen(function* () {
+      const tool = Option.getOrUndefined(config.tool);
       const inventory = yield* InstalledSkills.list({
         target: {
           type: "local",
         },
+        ...(tool === undefined ? {} : { tool }),
       });
       const stdout = config.json
         ? renderJson({ skills: inventory.skills, sources: inventory.sources })
@@ -296,19 +301,20 @@ const renderSkills = (inventory: InstalledSkills.InstalledSkillsInventory) => {
       skill.agent,
       skill.name,
       skill.source.scope,
+      skill.source.state,
       skill.metadataState,
       skill.path,
     ]),
     ...inventory.sources
       .filter((source) => source.state !== "scanned")
-      .map((source) => [source.agent, "<source>", source.scope, source.state, source.path]),
+      .map((source) => [source.agent, "<source>", source.scope, source.state, "", source.path]),
   ];
 
   if (rows.length === 0) {
     return "Skills\nNo installed Skills found.\n";
   }
 
-  const header = ["Agent", "Name", "Scope", "State", "Path"];
+  const header = ["Agent", "Name", "Scope", "SourceState", "MetadataState", "Path"];
   const widths = header.map((heading, index) =>
     Math.max(heading.length, ...rows.map((row) => row[index]?.length ?? 0)),
   );

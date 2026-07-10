@@ -853,6 +853,19 @@ describe("CLI Skill Visibility", () => {
             state: "scanned",
           },
         },
+        {
+          agent: "codex",
+          metadataState: "missing-frontmatter",
+          name: "explain",
+          path: "/repo/.agents/skills/explain",
+          skillFilePath: "/repo/.agents/skills/explain/SKILL.md",
+          source: {
+            agent: "codex",
+            path: "/repo/.agents/skills",
+            scope: "project",
+            state: "scanned",
+          },
+        },
       ],
       sources: [
         {
@@ -867,6 +880,12 @@ describe("CLI Skill Visibility", () => {
           path: "/home/example/.claude/skills",
           scope: "user",
           state: "missing",
+        },
+        {
+          agent: "codex",
+          path: "/repo/.agents/skills",
+          scope: "project",
+          state: "scanned",
         },
       ],
       target: { type: "local" },
@@ -893,6 +912,19 @@ describe("CLI Skill Visibility", () => {
                 state: "scanned",
               },
             },
+            {
+              agent: "codex",
+              metadataState: "missing-frontmatter",
+              name: "explain",
+              path: "/repo/.agents/skills/explain",
+              skillFilePath: "/repo/.agents/skills/explain/SKILL.md",
+              source: {
+                agent: "codex",
+                path: "/repo/.agents/skills",
+                scope: "project",
+                state: "scanned",
+              },
+            },
           ],
           sources: [
             {
@@ -908,6 +940,12 @@ describe("CLI Skill Visibility", () => {
               scope: "user",
               state: "missing",
             },
+            {
+              agent: "codex",
+              path: "/repo/.agents/skills",
+              scope: "project",
+              state: "scanned",
+            },
           ],
         });
       }),
@@ -922,8 +960,22 @@ describe("CLI Skill Visibility", () => {
         assert.match(result.stdout, /claude-code/);
         assert.match(result.stdout, /review/);
         assert.match(result.stdout, /project/);
+        assert.match(result.stdout, /SourceState/);
+        assert.match(result.stdout, /MetadataState/);
         assert.match(result.stdout, /parsed/);
         assert.match(result.stdout, /missing/);
+      }),
+    );
+
+    test.effect("filters Installed Skills by tool", () =>
+      Effect.gen(function* () {
+        const result = yield* runCli(["list", "skills", "--tool", "codex"]);
+
+        assert.strictEqual(result.exitCode, 0);
+        assert.match(result.stdout, /codex/);
+        assert.match(result.stdout, /explain/);
+        assert.notMatch(result.stdout, /claude-code/);
+        assert.notMatch(result.stdout, /review/);
       }),
     );
   });

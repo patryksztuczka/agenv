@@ -402,6 +402,90 @@ describe("Installed Skills", () => {
       }),
     );
   });
+
+  const overlappingSourcePlans: readonly InstalledSkills.SourcePlan[] = [
+    { agent: "codex", path: "/repo/.agents/skills", scope: "project" },
+    { agent: "opencode", path: "/repo/.agents/skills", scope: "project" },
+    { agent: "codex", path: "/etc/codex/skills", scope: "system" },
+  ];
+
+  layer(
+    AgentFileSystem.layer(
+      (path) =>
+        path === "/etc/codex/skills/root-only/SKILL.md"
+          ? Effect.fail(new AgentFileSystem.FileUnreadable({ message: "permission denied" }))
+          : Effect.succeed("---\nname: review\ndescription: Review code\n---\nBody"),
+      undefined,
+      (path) => {
+        if (path === "/repo/.agents/skills") {
+          return Effect.succeed([{ isDirectory: true, name: "review" }]);
+        }
+
+        if (path === "/etc/codex/skills") {
+          return Effect.succeed([{ isDirectory: true, name: "root-only" }]);
+        }
+
+        return Effect.fail(new AgentFileSystem.FileNotFound({ message: "missing" }));
+      },
+    ),
+  )((test) => {
+    test.effect(
+      "keeps overlapping root provenance per visible agent and classifies unreadable metadata",
+      () =>
+        Effect.gen(function* () {
+          const inventory = yield* InstalledSkills.load({
+            sourcePlans: overlappingSourcePlans,
+            target: { type: "local" },
+          });
+
+          assert.deepStrictEqual(
+            inventory.sources.map((source) => [
+              source.agent,
+              source.path,
+              source.scope,
+              source.state,
+            ]),
+            [
+              ["codex", "/repo/.agents/skills", "project", "scanned"],
+              ["opencode", "/repo/.agents/skills", "project", "scanned"],
+              ["codex", "/etc/codex/skills", "system", "scanned"],
+            ],
+          );
+          assert.deepStrictEqual(
+            inventory.skills.map((skill) => [
+              skill.agent,
+              skill.name,
+              skill.source.path,
+              skill.metadataState,
+            ]),
+            [
+              ["codex", "review", "/repo/.agents/skills", "parsed"],
+              ["opencode", "review", "/repo/.agents/skills", "parsed"],
+              ["codex", "root-only", "/etc/codex/skills", "unreadable"],
+            ],
+          );
+        }),
+    );
+
+    test.effect("filters source plans by tool", () =>
+      Effect.gen(function* () {
+        const inventory = yield* InstalledSkills.load({
+          sourcePlans: overlappingSourcePlans,
+          target: { type: "local" },
+          tool: "opencode",
+        });
+
+        assert.deepStrictEqual(
+          inventory.sources.map((source) => source.agent),
+          ["opencode"],
+        );
+        assert.deepStrictEqual(
+          inventory.skills.map((skill) => skill.agent),
+          ["opencode"],
+        );
+      }),
+    );
+  });
 });
 
 describe("OpenSSH", () => {
