@@ -1,8 +1,14 @@
 import { serve } from "@hono/node-server";
-import { AgentFileSystem, CodexConfigFile, MachineInventory, OpenSsh } from "@agenv/core";
+import {
+  AgentFileSystem,
+  CodexConfigFile,
+  InstalledSkills,
+  MachineInventory,
+  OpenSsh,
+} from "@agenv/core";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { Hono } from "hono";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,7 +21,10 @@ export interface ApiOptions {
    * into a ManagedRuntime inside `createApp` and reused for each request.
    */
   readonly layer: Layer.Layer<
-    MachineInventory.MachineInventoryService | AgentFileSystem.AgentFileSystem | OpenSsh.OpenSsh
+    | AgentFileSystem.AgentFileSystem
+    | InstalledSkills.InstalledSkillsService
+    | MachineInventory.MachineInventoryService
+    | OpenSsh.OpenSsh
   >;
 }
 
@@ -68,6 +77,41 @@ export const createApp = (options: ApiOptions) => {
     return context.json(snapshot);
   });
 
+  app.get("/skills", async (context) => {
+    const target = parseConfigTarget(context.req.query("target"), context.req.query("alias"));
+
+    if (target === undefined) {
+      return context.json(
+        {
+          error: "target must be local or ssh with alias",
+        },
+        400,
+      );
+    }
+
+    const tool = parseSkillTool(context.req.query("tool"));
+    const projectPath = context.req.query("projectPath");
+
+    if (tool === undefined && context.req.query("tool") !== undefined) {
+      return context.json(
+        {
+          error: "tool must be claude-code, codex, or opencode",
+        },
+        400,
+      );
+    }
+
+    return context.json(
+      await runtime.runPromise(
+        InstalledSkills.list({
+          target,
+          ...(projectPath === undefined ? {} : { projectPath }),
+          ...(tool === undefined ? {} : { tool }),
+        }),
+      ),
+    );
+  });
+
   return app;
 };
 
@@ -88,13 +132,25 @@ const app = createApp({
     MachineInventory.liveLayer({
       sshConfigPath: join(homeDirectory(), ".ssh", "config"),
     }),
-    AgentFileSystem.layer((path) =>
-      Effect.tryPromise({
-        catch: AgentFileSystem.classifyReadFailure,
-        try: () => readFile(path, "utf8"),
-      }),
+    AgentFileSystem.layer(
+      (path) =>
+        Effect.tryPromise({
+          catch: AgentFileSystem.classifyReadFailure,
+          try: () => readFile(path, "utf8"),
+        }),
+      undefined,
+      (path) =>
+        Effect.tryPromise({
+          catch: AgentFileSystem.classifyReadFailure,
+          try: async () =>
+            (await readdir(path, { withFileTypes: true })).map((entry) => ({
+              isDirectory: entry.isDirectory(),
+              name: entry.name,
+            })),
+        }),
     ),
     OpenSsh.liveLayer,
+    InstalledSkills.liveLayer,
   ),
 });
 
@@ -111,6 +167,14 @@ const parseConfigTarget = (
       alias,
       type: "ssh",
     };
+  }
+
+  return undefined;
+};
+
+const parseSkillTool = (tool: string | undefined): InstalledSkills.SkillAgent | undefined => {
+  if (tool === "claude-code" || tool === "codex" || tool === "opencode") {
+    return tool;
   }
 
   return undefined;

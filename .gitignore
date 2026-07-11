@@ -5,3 +5,6 @@ coverage/
 .env
 .DS_Store
 .repos/effect
+
+# Riptide artifacts (cloud-synced)
+.humanlayer/tasks/

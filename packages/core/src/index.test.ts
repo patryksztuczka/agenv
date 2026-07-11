@@ -1,13 +1,14 @@
 import { assert, describe, it, layer } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test as vitestTest } from "vitest";
 import {
   AgentFileSystem,
   CodexConfigDiff,
   CodexConfigFile,
+  InstalledSkills,
   MachineInventory,
   OpenSsh,
   PackageManagerDiagnostics,
@@ -289,6 +290,385 @@ describe("Machine Inventory", () => {
   });
 });
 
+describe("Installed Skills", () => {
+  const sourcePlans: readonly InstalledSkills.SourcePlan[] = [
+    {
+      agent: "claude-code",
+      path: "/repo/.claude/skills",
+      scope: "project",
+    },
+    {
+      agent: "claude-code",
+      path: "/home/example/.claude/skills",
+      scope: "user",
+    },
+  ];
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(
+        (path) => {
+          assert.strictEqual(path, "/repo/.claude/skills/review/SKILL.md");
+
+          return Effect.succeed("---\nname: review\ndescription: Review code\n---\nUse carefully.");
+        },
+        undefined,
+        (path) =>
+          path === "/repo/.claude/skills"
+            ? Effect.succeed([
+                {
+                  isDirectory: true,
+                  name: "review",
+                },
+              ])
+            : Effect.fail(
+                new AgentFileSystem.FileNotFound({
+                  message: "No such file or directory",
+                }),
+              ),
+      ),
+      OpenSsh.layer({
+        resolve: () => Effect.succeed(""),
+      }),
+    ),
+  )((test) => {
+    test.effect("lists parsed local Claude Code skills with source provenance", () =>
+      Effect.gen(function* () {
+        const inventory = yield* InstalledSkills.load({
+          sourcePlans,
+          target: { type: "local" },
+        });
+
+        assert.deepStrictEqual(inventory.sources, [
+          {
+            agent: "claude-code",
+            path: "/repo/.claude/skills",
+            scope: "project",
+            state: "scanned",
+          },
+          {
+            agent: "claude-code",
+            error: "No such file or directory",
+            path: "/home/example/.claude/skills",
+            scope: "user",
+            state: "missing",
+          },
+        ]);
+        assert.deepStrictEqual(inventory.skills, [
+          {
+            agent: "claude-code",
+            description: "Review code",
+            metadataState: "parsed",
+            name: "review",
+            path: "/repo/.claude/skills/review",
+            skillFilePath: "/repo/.claude/skills/review/SKILL.md",
+            source: inventory.sources[0],
+          },
+        ]);
+      }),
+    );
+  });
+
+  layer(
+    AgentFileSystem.layer(
+      (path) =>
+        path.includes("optional-frontmatter")
+          ? Effect.succeed(
+              [
+                "---",
+                "name: optional",
+                "description: Optional fields are allowed",
+                "tools:",
+                "  - read",
+                "tags: [agent, skill]",
+                "---",
+                "Body",
+              ].join("\n"),
+            )
+          : path.includes("missing-frontmatter")
+            ? Effect.succeed("No frontmatter")
+            : Effect.succeed("---\nname: [invalid]\n---\nBody"),
+      undefined,
+      (path) =>
+        path === "/repo/.claude/skills"
+          ? Effect.succeed([
+              { isDirectory: true, name: "missing-frontmatter" },
+              { isDirectory: true, name: "invalid-frontmatter" },
+              { isDirectory: true, name: "optional-frontmatter" },
+            ])
+          : Effect.fail(new AgentFileSystem.FileUnreadable({ message: "permission denied" })),
+    ),
+  )((test) => {
+    test.effect("classifies skill frontmatter and tolerates unsupported fields", () =>
+      Effect.gen(function* () {
+        const inventory = yield* InstalledSkills.load({
+          sourcePlans: [sourcePlans[0]],
+          target: { type: "local" },
+        });
+
+        assert.deepStrictEqual(
+          inventory.skills.map((skill) => [skill.name, skill.metadataState, skill.description]),
+          [
+            ["missing-frontmatter", "missing-frontmatter", undefined],
+            ["invalid-frontmatter", "invalid-frontmatter", undefined],
+            ["optional", "parsed", "Optional fields are allowed"],
+          ],
+        );
+      }),
+    );
+  });
+
+  const overlappingSourcePlans: readonly InstalledSkills.SourcePlan[] = [
+    { agent: "codex", path: "/repo/.agents/skills", scope: "project" },
+    { agent: "opencode", path: "/repo/.agents/skills", scope: "project" },
+    { agent: "codex", path: "/etc/codex/skills", scope: "system" },
+  ];
+
+  layer(
+    AgentFileSystem.layer(
+      (path) =>
+        path === "/etc/codex/skills/root-only/SKILL.md"
+          ? Effect.fail(new AgentFileSystem.FileUnreadable({ message: "permission denied" }))
+          : Effect.succeed("---\nname: review\ndescription: Review code\n---\nBody"),
+      undefined,
+      (path) => {
+        if (path === "/repo/.agents/skills") {
+          return Effect.succeed([{ isDirectory: true, name: "review" }]);
+        }
+
+        if (path === "/etc/codex/skills") {
+          return Effect.succeed([{ isDirectory: true, name: "root-only" }]);
+        }
+
+        return Effect.fail(new AgentFileSystem.FileNotFound({ message: "missing" }));
+      },
+    ),
+  )((test) => {
+    test.effect(
+      "keeps overlapping root provenance per visible agent and classifies unreadable metadata",
+      () =>
+        Effect.gen(function* () {
+          const inventory = yield* InstalledSkills.load({
+            sourcePlans: overlappingSourcePlans,
+            target: { type: "local" },
+          });
+
+          assert.deepStrictEqual(
+            inventory.sources.map((source) => [
+              source.agent,
+              source.path,
+              source.scope,
+              source.state,
+            ]),
+            [
+              ["codex", "/repo/.agents/skills", "project", "scanned"],
+              ["opencode", "/repo/.agents/skills", "project", "scanned"],
+              ["codex", "/etc/codex/skills", "system", "scanned"],
+            ],
+          );
+          assert.deepStrictEqual(
+            inventory.skills.map((skill) => [
+              skill.agent,
+              skill.name,
+              skill.source.path,
+              skill.metadataState,
+              skill.error,
+            ]),
+            [
+              ["codex", "review", "/repo/.agents/skills", "parsed", undefined],
+              ["opencode", "review", "/repo/.agents/skills", "parsed", undefined],
+              ["codex", "root-only", "/etc/codex/skills", "unreadable", "permission denied"],
+            ],
+          );
+        }),
+    );
+
+    test.effect("filters source plans by tool", () =>
+      Effect.gen(function* () {
+        const inventory = yield* InstalledSkills.load({
+          sourcePlans: overlappingSourcePlans,
+          target: { type: "local" },
+          tool: "opencode",
+        });
+
+        assert.deepStrictEqual(
+          inventory.sources.map((source) => source.agent),
+          ["opencode"],
+        );
+        assert.deepStrictEqual(
+          inventory.skills.map((skill) => skill.agent),
+          ["opencode"],
+        );
+      }),
+    );
+  });
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(() =>
+        Effect.fail(new AgentFileSystem.FileNotFound({ message: "local unused" })),
+      ),
+      OpenSsh.layer({
+        readDirectory: (_alias, path) => {
+          if (path === "~/.claude/skills") {
+            return Effect.succeed([{ isDirectory: true, name: "debug" }]);
+          }
+
+          if (path === "~/.agents/skills") {
+            return Effect.fail(new OpenSsh.RemoteFileNotFound({ message: "remote missing" }));
+          }
+
+          if (path === "/etc/codex/skills") {
+            return Effect.fail(new OpenSsh.RemoteFileUnreadable({ message: "permission denied" }));
+          }
+
+          return Effect.fail(new OpenSsh.ConnectionFailed({ message: "ssh failed" }));
+        },
+        readFile: (_alias, path) => {
+          assert.strictEqual(path, "~/.claude/skills/debug/SKILL.md");
+
+          return Effect.succeed("---\nname: debug\ndescription: Debug remotely\n---\nBody");
+        },
+        resolve: () => Effect.succeed(""),
+      }),
+    ),
+  )((test) => {
+    test.effect("lists remote skills and classifies remote source failures", () =>
+      Effect.gen(function* () {
+        const inventory = yield* InstalledSkills.load({
+          sourcePlans: [
+            { agent: "claude-code", path: "~/.claude/skills", scope: "user" },
+            { agent: "codex", path: "~/.agents/skills", scope: "user" },
+            { agent: "codex", path: "/etc/codex/skills", scope: "system" },
+            { agent: "opencode", path: "~/.config/opencode/skills", scope: "user" },
+          ],
+          target: { alias: "workstation", type: "ssh" },
+        });
+
+        assert.deepStrictEqual(
+          inventory.sources.map((source) => [source.path, source.state, source.error]),
+          [
+            ["~/.claude/skills", "scanned", undefined],
+            ["~/.agents/skills", "missing", "remote missing"],
+            ["/etc/codex/skills", "unreadable", "permission denied"],
+            ["~/.config/opencode/skills", "connection-failed", "ssh failed"],
+          ],
+        );
+        assert.deepStrictEqual(inventory.skills, [
+          {
+            agent: "claude-code",
+            description: "Debug remotely",
+            metadataState: "parsed",
+            name: "debug",
+            path: "~/.claude/skills/debug",
+            skillFilePath: "~/.claude/skills/debug/SKILL.md",
+            source: inventory.sources[0],
+          },
+        ]);
+      }),
+    );
+  });
+
+  layer(
+    Layer.mergeAll(
+      AgentFileSystem.layer(() =>
+        Effect.fail(new AgentFileSystem.FileNotFound({ message: "local unused" })),
+      ),
+      OpenSsh.layer({
+        readDirectory: (_alias, path) => Effect.succeed([{ isDirectory: true, name: path }]),
+        readFile: () => Effect.succeed("---\nname: remote\n---\nBody"),
+        resolve: () => Effect.succeed(""),
+      }),
+    ),
+  )((test) => {
+    test.effect("omits SSH project roots unless projectPath is supplied", () =>
+      Effect.gen(function* () {
+        const withoutProjectPath = yield* InstalledSkills.load({
+          target: { alias: "workstation", type: "ssh" },
+          tool: "claude-code",
+        });
+        const withProjectPath = yield* InstalledSkills.load({
+          projectPath: "/srv/repo",
+          target: { alias: "workstation", type: "ssh" },
+          tool: "claude-code",
+        });
+
+        assert.deepStrictEqual(
+          withoutProjectPath.sources.map((source) => source.path),
+          ["~/.claude/skills"],
+        );
+        assert.deepStrictEqual(
+          withProjectPath.sources.map((source) => source.path),
+          ["/srv/repo/.claude/skills", "~/.claude/skills"],
+        );
+      }),
+    );
+  });
+
+  layer(
+    AgentFileSystem.layer(
+      () => Effect.fail(new AgentFileSystem.FileNotFound({ message: "unused" })),
+      undefined,
+      () => Effect.fail(new AgentFileSystem.FileNotFound({ message: "missing" })),
+    ),
+  )((test) => {
+    const originalHome = process.env.HOME;
+    const restoreHome = () => {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    };
+
+    test.effect("uses requested local projectPath for project source plans", () =>
+      Effect.gen(function* () {
+        process.env.HOME = "/home/example";
+
+        const inventory = yield* InstalledSkills.load({
+          projectPath: "/workspace/repo",
+          target: { type: "local" },
+          tool: "claude-code",
+        });
+
+        assert.deepStrictEqual(
+          inventory.sources.map((source) => source.path),
+          ["/workspace/repo/.claude/skills", "/home/example/.claude/skills"],
+        );
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            restoreHome();
+          }),
+        ),
+      ),
+    );
+
+    test.effect("uses os home directory for local user sources when HOME is unset", () =>
+      Effect.gen(function* () {
+        delete process.env.HOME;
+
+        const inventory = yield* InstalledSkills.load({
+          target: { type: "local" },
+          tool: "codex",
+        });
+
+        const sourcePaths = new Set(inventory.sources.map((source) => source.path));
+
+        assert.match(homedir(), /.+/);
+        assert.ok(sourcePaths.has(join(homedir(), ".agents", "skills")));
+        assert.ok(!sourcePaths.has(".agents/skills"));
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            restoreHome();
+          }),
+        ),
+      ),
+    );
+  });
+});
+
 describe("OpenSSH", () => {
   vitestTest("rejects SSH aliases that could be parsed as options", () => {
     assert.throws(
@@ -317,6 +697,14 @@ describe("OpenSSH", () => {
         "cat -- '/tmp/agent'\\''s config.toml'",
       ].join("; "),
     );
+  });
+
+  vitestTest("uses a POSIX-compatible remote directory listing command", () => {
+    const command = OpenSsh.unsafeOpenSshInternals.remoteReadDirectoryCommand("~/agent skills");
+
+    assert.notMatch(command, /-printf/);
+    assert.match(command, /for entry in/);
+    assert.match(command, /printf '%s\\t%s\\n'/);
   });
 
   vitestTest("does not classify arbitrary SSH exit code 2 as a missing remote file", () => {

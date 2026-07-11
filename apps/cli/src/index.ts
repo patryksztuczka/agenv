@@ -3,6 +3,7 @@ import {
   AgentFileSystem,
   CodexConfigDiff,
   CodexConfigFile,
+  InstalledSkills,
   MachineInventory,
   ManagedFileSnapshot,
   OpenSsh,
@@ -14,7 +15,7 @@ import type { Console as EffectConsole } from "effect/Console";
 import { CliOutput, Command, Flag } from "effect/unstable/cli";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -72,6 +73,11 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
   const jsonFlag = Flag.boolean("json");
   const applyFlag = Flag.boolean("apply");
   const rawFlag = Flag.boolean("raw");
+  const skillToolFlag = Flag.choice("tool", ["claude-code", "codex", "opencode"] as const).pipe(
+    Flag.optional,
+  );
+  const hostFlag = Flag.string("host").pipe(Flag.optional);
+  const projectPathFlag = Flag.string("project-path").pipe(Flag.optional);
 
   const hosts = Command.make("hosts", { json: jsonFlag }, (config) =>
     Effect.gen(function* () {
@@ -83,7 +89,27 @@ const makeCommand = (resultRef: Ref.Ref<CliResult>) => {
       yield* Ref.set(resultRef, success(stdout));
     }),
   );
-  const list = Command.make("list").pipe(Command.withSubcommands([hosts]));
+  const skills = Command.make(
+    "skills",
+    { host: hostFlag, json: jsonFlag, projectPath: projectPathFlag, tool: skillToolFlag },
+    (config) =>
+      Effect.gen(function* () {
+        const host = Option.getOrUndefined(config.host);
+        const projectPath = Option.getOrUndefined(config.projectPath);
+        const tool = Option.getOrUndefined(config.tool);
+        const inventory = yield* InstalledSkills.list({
+          target: host === undefined ? { type: "local" } : { alias: host, type: "ssh" },
+          ...(projectPath === undefined ? {} : { projectPath }),
+          ...(tool === undefined ? {} : { tool }),
+        });
+        const stdout = config.json
+          ? renderJson({ skills: inventory.skills, sources: inventory.sources })
+          : renderSkills(inventory);
+
+        yield* Ref.set(resultRef, success(stdout));
+      }),
+  );
+  const list = Command.make("list").pipe(Command.withSubcommands([hosts, skills]));
 
   const configCommand = Command.make(
     "config",
@@ -269,6 +295,49 @@ const renderHosts = (inventory: MachineInventory.Inventory) => {
 
   return [
     "Hosts",
+    renderRow(header),
+    renderRow(widths.map((width) => "-".repeat(width))),
+    ...rows.map(renderRow),
+  ].join("\n");
+};
+
+const renderSkills = (inventory: InstalledSkills.InstalledSkillsInventory) => {
+  const rows = [
+    ...inventory.skills.map((skill) => [
+      skill.agent,
+      skill.name,
+      skill.source.scope,
+      skill.source.state,
+      skill.metadataState,
+      skill.path,
+      skill.error ?? "",
+    ]),
+    ...inventory.sources
+      .filter((source) => source.state !== "scanned")
+      .map((source) => [
+        source.agent,
+        "<source>",
+        source.scope,
+        source.state,
+        "",
+        source.path,
+        source.error ?? "",
+      ]),
+  ];
+
+  if (rows.length === 0) {
+    return "Skills\nNo installed Skills found.\n";
+  }
+
+  const header = ["Agent", "Name", "Scope", "SourceState", "MetadataState", "Path", "Error"];
+  const widths = header.map((heading, index) =>
+    Math.max(heading.length, ...rows.map((row) => row[index]?.length ?? 0)),
+  );
+  const renderRow = (row: readonly string[]) =>
+    row.map((cell, index) => cell.padEnd(widths[index] ?? 0)).join("  ");
+
+  return [
+    "Skills",
     renderRow(header),
     renderRow(widths.map((width) => "-".repeat(width))),
     ...rows.map(renderRow),
@@ -716,12 +785,22 @@ const liveLayer = Layer.mergeAll(
           await rename(temporaryPath, path);
         },
       }),
+    (path) =>
+      Effect.tryPromise({
+        catch: AgentFileSystem.classifyReadFailure,
+        try: async () =>
+          (await readdir(path, { withFileTypes: true })).map((entry) => ({
+            isDirectory: entry.isDirectory(),
+            name: entry.name,
+          })),
+      }),
   ),
   OpenSsh.liveLayer,
   PackageManagerDiagnostics.liveLayer,
   MachineInventory.liveLayer({
     sshConfigPath: join(process.env.HOME ?? homedir(), ".ssh", "config"),
   }),
+  InstalledSkills.liveLayer,
 );
 
 const cliLayer = Layer.mergeAll(
