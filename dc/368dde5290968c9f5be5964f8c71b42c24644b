@@ -1,0 +1,19 @@
+.humanlayer/workspace.json
+  s_43274f6f51c4b4::t_bab5b2b198ff51 1-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "dc368dde5290968c9f5be5964f8c71b42c24644b",
+  "prompts": {},
+  "sessions": {
+    "s_43274f6f51c4b4": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "019f511b-246b-70ae-889c-174357e08294",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Patryk Sztuczka <patryk.sztuczka00@gmail.com>"
+    }
+  }
+}
